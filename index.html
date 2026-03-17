@@ -267,33 +267,61 @@ function renderAuth(){
       dsel.onchange=e=>domain=e.target.value;
       urow.appendChild(uinp); urow.appendChild(dsel); card.appendChild(urow);
 
-      // Domain pills
+      // Domain pills — no rebuild on interaction, update DOM directly
       const dsec=el('div',{class:'dsec',style:'margin-bottom:14px'});
-      const dpills=el('div',{class:'dpills'});
-      domains.forEach(d=>{
-        const pill=el('div',{class:'dpill'+(d===domain?' sel':'')},d);
-        pill.onclick=()=>{domain=d;dsel.value=d;rebuild();};
-        if(!FREE_DOMAINS.includes(d)){
-          const x=el('button',{class:'dpill-x'},'×');
-          x.onclick=e=>{e.stopPropagation();domains=domains.filter(i=>i!==d);if(domain===d)domain=domains[0];rebuild();};
-          pill.appendChild(x);
-        }
-        dpills.appendChild(pill);
-      });
+      const dpills=el('div',{class:'dpills',id:'dpills-container'});
+
+      function renderPills(){
+        dpills.innerHTML='';
+        domains.forEach(d=>{
+          const pill=el('div',{class:'dpill'+(d===domain?' sel':'')},d);
+          pill.onclick=()=>{
+            domain=d;
+            if(dsel)dsel.value=d;
+            renderPills();
+          };
+          if(!FREE_DOMAINS.includes(d)){
+            const x=el('button',{class:'dpill-x'},'×');
+            x.onclick=e=>{
+              e.stopPropagation();
+              domains=domains.filter(i=>i!==d);
+              if(domain===d)domain=domains[0];
+              renderPills();
+            };
+            pill.appendChild(x);
+          }
+          dpills.appendChild(pill);
+        });
+      }
+      renderPills();
       dsec.appendChild(dpills);
+
       const darow=el('div',{class:'dadd-row'});
-      const dainp=el('input',{class:'dadd-inp',placeholder:'add custom domain e.g. mycompany.com'});
-      dainp.oninput=e=>customInp=e.target.value;
-      dainp.value=customInp;
+      const dainp=document.createElement('input');
+      dainp.className='dadd-inp';
+      dainp.placeholder='type domain e.g. mycompany.com';
+      dainp.type='text';
+      dainp.autocomplete='off';
+      dainp.spellcheck=false;
+
       const dabtn=el('button',{class:'dadd-btn'},'+ Add');
+      dabtn.type='button';
       dabtn.onclick=()=>{
-        let d=customInp.trim();if(!d)return;
+        let d=dainp.value.trim();
+        if(!d)return;
         if(!d.startsWith('@'))d='@'+d;
-        if(!/^@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(d)){showErr('Invalid domain. Example: @mycompany.com');return;}
+        if(!/^@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(d)){showErr('Invalid domain. Example: mycompany.com');return;}
         if(!domains.includes(d))domains.push(d);
-        domain=d;customInp='';rebuild();
+        domain=d;
+        if(dsel){
+          const o=el('option',{value:d},d);
+          dsel.appendChild(o);
+          dsel.value=d;
+        }
+        dainp.value='';
+        renderPills();
       };
-      dainp.onkeydown=e=>e.key==='Enter'&&dabtn.click();
+      dainp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();dabtn.click();}};
       darow.appendChild(dainp);darow.appendChild(dabtn);dsec.appendChild(darow);
       dsec.appendChild(el('div',{class:'dhint'},'This is your in-app email address e.g. yourname@mycompany.com'));
       card.appendChild(dsec);
