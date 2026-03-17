@@ -166,8 +166,8 @@ label.lbl{font-size:12px;color:var(--text2);display:block;margin-bottom:5px}
 //  ⚙️  CONFIGURATION — replace with your Supabase credentials
 //  Get them from: Supabase Dashboard → Project → Settings → API
 // ═══════════════════════════════════════════════════════════
-const SUPABASE_URL  = 'https://uarmuzwvluqmpsvvdwir.supabase.co';
-const SUPABASE_ANON = 'sb_publishable_-giDe1inBdQufvJV1zcypg_d9DggAN8';
+const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
 // ═══════════════════════════════════════════════════════════
 
 const FREE_DOMAINS = ['@mailbox.io','@fastpost.net','@swiftmail.org','@clearpost.me','@inboxly.com'];
@@ -326,16 +326,7 @@ function renderAuth(){
       dsec.appendChild(el('div',{class:'dhint'},'This is your in-app email address e.g. yourname@mycompany.com'));
       card.appendChild(dsec);
 
-      // Real email for auth
-      card.appendChild(el('label',{class:'lbl'},'Your real email (used to log in)'));
-      const reinp=el('input',{class:'inp',type:'email',placeholder:'your@gmail.com',value:realEmail});
-      reinp.oninput=e=>realEmail=e.target.value;
-      card.appendChild(reinp);
-    } else {
-      card.appendChild(el('label',{class:'lbl'},'Login email'));
-      const reinp=el('input',{class:'inp',type:'email',placeholder:'your@gmail.com',value:realEmail});
-      reinp.oninput=e=>realEmail=e.target.value;
-      card.appendChild(reinp);
+
     }
 
     card.appendChild(el('label',{class:'lbl'},'Password'));
@@ -355,20 +346,26 @@ function renderAuth(){
 
     abtn.onclick=async()=>{
       msgArea.innerHTML='';
-      if(!realEmail.trim()){showErr('Enter your login email.');return;}
+      if(!username.trim()){showErr('Enter a username.');return;}
       if(!password.trim()){showErr('Enter a password.');return;}
-      if(tab==='create'&&!username.trim()){showErr('Enter a username for your mailbox.');return;}
       if(tab==='create'&&password!==confirm){showErr('Passwords do not match.');return;}
       abtn.disabled=true;abtn.textContent='Please wait...';
       const mailboxAddr=username.trim()+domain;
+      // Use project domain for internal auth email — always passes validation
+      const projectDomain=SUPABASE_URL.replace('https://','').replace('http://','');
+      const internalEmail=username.trim().toLowerCase().replace(/[^a-z0-9]/g,'')+'@'+projectDomain;
       try{
         if(tab==='login'){
-          const {error}=await sb.auth.signInWithPassword({email:realEmail.trim(),password});
-          if(error)throw error;
+          const {error}=await sb.auth.signInWithPassword({email:internalEmail,password});
+          if(error){
+            // fallback: try legacy real-email login
+            const {error:e2}=await sb.auth.signInWithPassword({email:realEmail.trim()||internalEmail,password});
+            if(e2)throw error;
+          }
         } else {
           const {data:existing}=await sb.from('profiles').select('id').eq('email_address',mailboxAddr).maybeSingle();
           if(existing){showErr('That mailbox address is already taken. Choose another.');abtn.disabled=false;abtn.textContent='Create account →';return;}
-          const {data,error}=await sb.auth.signUp({email:realEmail.trim(),password});
+          const {data,error}=await sb.auth.signUp({email:internalEmail,password});
           if(error)throw error;
           if(data?.user){
             await sb.from('profiles').update({email_address:mailboxAddr,display_name:username.trim()}).eq('id',data.user.id);
@@ -377,10 +374,6 @@ function renderAuth(){
         }
       } catch(e){showErr(e.message||'Something went wrong.');abtn.disabled=false;abtn.textContent=tab==='login'?'Sign in →':'Create account →';}
     };
-
-    if(tab==='login'){
-      card.appendChild(el('div',{class:'dhint',style:'margin-top:10px;text-align:center'},'Sign in with the real email you used to create your account'));
-    }
   }
   rebuild();
   return screen;
