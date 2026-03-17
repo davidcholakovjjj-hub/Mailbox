@@ -264,53 +264,32 @@ function renderAuth(){
       b.onclick=()=>{tab=t;build();};
       tabs.appendChild(b);
     });
-    card.insertBefore(tabs,msgDiv);
+    card.appendChild(tabs);
 
-    // ── OAUTH BUTTONS ──────────────────────
-    const oauthDiv=mk('div','');
-    oauthDiv.style.cssText='display:flex;flex-direction:column;gap:8px;margin-bottom:4px';
-
-    const gBtn=mk('button','');
-    gBtn.style.cssText='width:100%;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);font-family:inherit;font-size:14px;color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:border-color .15s';
-    gBtn.onmouseover=()=>gBtn.style.borderColor='var(--border2)';
-    gBtn.onmouseout=()=>gBtn.style.borderColor='var(--border)';
-    gBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>Continue with Google`;
-    gBtn.onclick=async()=>{
-      const {error}=await sb.auth.signInWithOAuth({
-        provider:'google',
-        options:{redirectTo:window.location.href}
-      });
-      if(error)showErr(error.message);
-    };
-    oauthDiv.appendChild(gBtn);
-
+    // Facebook button
     const fbBtn=mk('button','');
-    fbBtn.style.cssText='width:100%;padding:10px 14px;background:#1877f2;border:1px solid #1877f2;border-radius:var(--rs);font-family:inherit;font-size:14px;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:opacity .15s';
+    fbBtn.style.cssText='width:100%;padding:11px;background:#1877f2;border:none;border-radius:var(--rs);font-family:inherit;font-size:14px;font-weight:500;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:opacity .15s';
     fbBtn.onmouseover=()=>fbBtn.style.opacity='.85';
     fbBtn.onmouseout=()=>fbBtn.style.opacity='1';
     fbBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff"><path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>Continue with Facebook`;
     fbBtn.onclick=async()=>{
-      const {error}=await sb.auth.signInWithOAuth({
-        provider:'facebook',
-        options:{redirectTo:window.location.href}
-      });
-      if(error)showErr(error.message);
+      fbBtn.disabled=true; fbBtn.textContent='Connecting...';
+      const {error}=await sb.auth.signInWithOAuth({provider:'facebook',options:{redirectTo:window.location.href}});
+      if(error){showErr(error.message);fbBtn.disabled=false;fbBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff"><path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>Continue with Facebook`;}
     };
-    oauthDiv.appendChild(fbBtn);
-
-    card.appendChild(oauthDiv);
+    card.appendChild(fbBtn);
 
     // divider
     const divRow=mk('div','');
-    divRow.style.cssText='display:flex;align-items:center;gap:10px;margin:4px 0';
-    const line1=mk('div','');line1.style.cssText='flex:1;height:1px;background:var(--border)';
-    const line2=mk('div','');line2.style.cssText='flex:1;height:1px;background:var(--border)';
+    divRow.style.cssText='display:flex;align-items:center;gap:10px;margin:14px 0';
+    const l1=mk('div','');l1.style.cssText='flex:1;height:1px;background:var(--border)';
+    const l2=mk('div','');l2.style.cssText='flex:1;height:1px;background:var(--border)';
     const orTxt=mk('span','');orTxt.style.cssText='font-size:12px;color:var(--text3);white-space:nowrap';
-    orTxt.textContent='or continue with username';
-    divRow.appendChild(line1);divRow.appendChild(orTxt);divRow.appendChild(line2);
+    orTxt.textContent='or use email';
+    divRow.appendChild(l1);divRow.appendChild(orTxt);divRow.appendChild(l2);
     card.appendChild(divRow);
 
-    // ── USERNAME FORM ──────────────────────
+    // email form
     if(tab==='create'){
       card.appendChild(mk('label','lbl','Display name'));
       const di=mk('input','inp');di.placeholder='Your Name';di.value=dispName;di.oninput=e=>dispName=e.target.value;card.appendChild(di);
@@ -318,14 +297,17 @@ function renderAuth(){
     card.appendChild(mk('label','lbl','Username'));
     const ui=mk('input','inp');ui.placeholder='yourname';ui.value=user;ui.autocomplete='username';
     ui.oninput=e=>user=e.target.value;card.appendChild(ui);
+
     card.appendChild(mk('label','lbl','Password'));
     const pi=mk('input','inp');pi.type='password';pi.placeholder='Password';pi.value=pass;
     pi.oninput=e=>pass=e.target.value;card.appendChild(pi);
+
     if(tab==='create'){
       card.appendChild(mk('label','lbl','Confirm password'));
       const pi2=mk('input','inp');pi2.type='password';pi2.placeholder='Repeat password';pi2.value=pass2;
       pi2.oninput=e=>pass2=e.target.value;card.appendChild(pi2);
     }
+
     const btn=mk('button','btn-primary',tab==='login'?'Sign in →':'Create account →');
     btn.onclick=async()=>{
       clearMsg();
