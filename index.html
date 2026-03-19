@@ -807,6 +807,38 @@ async function uploadMedia(file,userId){
   console.log('uploadMedia called with file:', file ? file.name : 'no file');
   console.log('User ID:', userId);
   
+  try {
+    console.log('1. Starting compressImage...');
+    const cf = await compressImage(file);
+    console.log('2. compressImage complete. New file size:', cf.size, 'type:', cf.type);
+    
+    const ext = cf.type === 'image/jpeg' ? 'jpg' : file.name.split('.').pop();
+    const path = `${userId}/${Date.now()}.${ext}`;
+    console.log('3. Generated path:', path);
+    
+    console.log('4. Calling uploadWithTimeout...');
+    const result = await uploadWithTimeout('media', path, cf, { cacheControl: '3600' });
+    console.log('5. uploadWithTimeout result:', result);
+    
+    if (result.error) {
+      console.error('6. Result contains error:', result.error);
+      throw new Error(result.error.message || 'Upload failed');
+    }
+    
+    console.log('7. Getting public URL...');
+    const publicUrl = sb.storage.from('media').getPublicUrl(path).data.publicUrl;
+    console.log('8. Public URL:', publicUrl);
+    
+    return publicUrl;
+    
+  } catch (error) {
+    console.error('9. ERROR in uploadMedia:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    throw error;
+  }
+}  
   // Rest of your code...
 }
 
