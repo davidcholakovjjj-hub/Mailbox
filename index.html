@@ -85,9 +85,12 @@ img,video{display:block}
 /* ══════════════════════════════════════════════════════
    LOADING SCREEN
 ══════════════════════════════════════════════════════ */
-.loading-screen{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;background:var(--bg0)}
-.px-loader{position:relative;width:160px;height:160px}
-.px-loader canvas{image-rendering:pixelated;image-rendering:crisp-edges}
+.loading-screen{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:var(--bg0);animation:fadeIn .3s ease}
+.loading-logo{font-family:'DM Mono',monospace;font-size:28px;font-weight:500;background:var(--story-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;background-size:200% 200%;animation:gradientShift 3s ease infinite}
+.loading-dots{display:flex;gap:6px}
+.loading-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:bounce .8s ease infinite}
+.loading-dot:nth-child(2){animation-delay:.15s}
+.loading-dot:nth-child(3){animation-delay:.3s}
 
 /* ══════════════════════════════════════════════════════
    SKELETON LOADER
@@ -1112,176 +1115,28 @@ function render(){
 //  LOADING
 // ═══════════════════════════════════════════════════════════════════════
 
-// ── Image compression before upload ──────────────────────────────────
-function compressImage(file, maxW=1200, quality=0.82){
+function compressImage(file,maxW=1200,quality=0.82){
   return new Promise(resolve=>{
-    if(file.type.startsWith('video/')){resolve(file);return;}
-    const img=new Image();
-    const url=URL.createObjectURL(file);
+    if(!file.type.startsWith('image/')){resolve(file);return;}
+    const img=new Image(),url=URL.createObjectURL(file);
     img.onload=()=>{
       URL.revokeObjectURL(url);
       const scale=Math.min(1,maxW/Math.max(img.width,img.height));
-      const w=Math.round(img.width*scale), h=Math.round(img.height*scale);
-      const c=document.createElement('canvas');c.width=w;c.height=h;
-      c.getContext('2d').drawImage(img,0,0,w,h);
-      c.toBlob(blob=>resolve(new File([blob],file.name,{type:'image/jpeg'})),'image/jpeg',quality);
+      const w=Math.round(img.width*scale),h=Math.round(img.height*scale);
+      const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+      cv.getContext('2d').drawImage(img,0,0,w,h);
+      cv.toBlob(b=>resolve(new File([b],file.name.replace(/\.[^.]+$/,'.jpg'),{type:'image/jpeg'})),'image/jpeg',quality);
     };
+    img.onerror=()=>{URL.revokeObjectURL(url);resolve(file);};
     img.src=url;
   });
 }
-
 function renderLoading(){
   const w=mk('div',{class:'loading-screen'});
-  const wrap=mk('div',{class:'px-loader'});
-  const c=document.createElement('canvas');
-  c.width=160;c.height=160;c.style.width='160px';c.style.height='160px';
-  wrap.appendChild(c);w.appendChild(wrap);
-
-  // pixel size
-  const P=8;
-  const cx2=c.getContext('2d');
-
-  // Colors
-  const COL_BG='#0a0a0b';
-  const COL_CIRCLE='#6366f1';
-  const COL_S='#f0f0f2';
-  const COL_GLOW='rgba(99,102,241,0.35)';
-
-  // 20x20 grid, circle in pixel coords (indices where circle border is)
-  // Pre-computed 20x20 circle ring pixels (radius ~8, center 9.5,9.5)
-  const GRID=20;
-  const CR=8.5, CCX=9.5, CCY=9.5;
-  const circlePx=[];
-  for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
-    const d=Math.sqrt((x-CCX)**2+(y-CCY)**2);
-    if(d>=CR-0.9&&d<=CR+0.4)circlePx.push([x,y]);
-  }
-  // Sort by angle
-  circlePx.sort((a,b)=>Math.atan2(a[1]-CCY,a[0]-CCX)-Math.atan2(b[1]-CCY,b[0]-CCX));
-
-  // 5x7 pixel font for "ocialbox"
-  const FONT={
-    o:[[0,1,1,0],[1,0,0,1],[1,0,0,1],[1,0,0,1],[0,1,1,0]],
-    c:[[0,1,1,0],[1,0,0,0],[1,0,0,0],[1,0,0,0],[0,1,1,0]],
-    i:[[1,1,1],[0,1,0],[0,1,0],[0,1,0],[1,1,1]],
-    a:[[0,1,1,0],[1,0,0,1],[1,1,1,1],[1,0,0,1],[1,0,0,1]],
-    l:[[1,0],[1,0],[1,0],[1,0],[1,1]],
-    b:[[1,0,0],[1,1,1],[1,0,1],[1,0,1],[1,1,1]],
-    x:[[1,0,1],[1,0,1],[0,1,0],[1,0,1],[1,0,1]],
-    s:[[0,1,1],[1,0,0],[0,1,0],[0,0,1],[1,1,0]],
-    S:[[0,1,1,1],[1,0,0,0],[0,1,1,0],[0,0,0,1],[1,1,1,0]],
-  };
-
-  // Draw one pixel (in grid units)
-  function dp(gx,gy,col){
-    cx2.fillStyle=col;
-    cx2.fillRect(gx*P,gy*P,P,P);
-  }
-
-  // Draw letter at pixel position
-  function drawLetter(ch,startX,startY,col){
-    const m=FONT[ch];if(!m)return;
-    for(let r=0;r<m.length;r++)for(let cc=0;cc<m[r].length;cc++)if(m[r][cc])dp(startX+cc,startY+r,col);
-  }
-
-  // Draw "ocialbox" centered below circle, pixel art style
-  function drawWordmark(){
-    const word=['o','c','i','a','l','b','o','x'];
-    const widths=word.map(ch=>FONT[ch][0].length+1);
-    const total=widths.reduce((a,b)=>a+b,0)-1;
-    let x=Math.round((GRID-total)/2);
-    for(let i=0;i<word.length;i++){
-      drawLetter(word[i],x,14,COL_CIRCLE);
-      x+=widths[i];
-    }
-  }
-
-  // Animation state
-  // Phase 0: circle draws in (0..1)
-  // Phase 1: S breaks out, spins around outside circle (0..1)
-  // Phase 2: S comes back, circle closes (0..1)
-  let phase=0, prog=0;
-  let raf;
-  const PHASE_DUR=[800,1100,700]; // ms per phase
-
-  // S orbit: travels outside the circle one full loop
-  function getSOrbit(t){
-    // t 0..1 = one full orbit outside circle
-    const angle=-Math.PI/2 + t*Math.PI*2; // start top
-    const r=CR+2.5;
-    return [CCX+r*Math.cos(angle)-0.5, CCY+r*Math.sin(angle)-0.5];
-  }
-
-  // Break-out position: S moves from center to orbit start
-  function getSBreak(t){
-    const [ox,oy]=getSOrbit(0);
-    return [CCX-0.5+(ox-(CCX-0.5))*t, CCY-0.5+(oy-(CCY-0.5))*t];
-  }
-
-  // Return position: S moves from orbit end back to center
-  function getSReturn(t){
-    const [ox,oy]=getSOrbit(1);
-    return [ox+(CCX-0.5-ox)*t, oy+(CCY-0.5-oy)*t];
-  }
-
-  let lastTs=null;
-  function frame(ts){
-    if(!lastTs)lastTs=ts;
-    const dt=ts-lastTs;lastTs=ts;
-    prog+=dt/PHASE_DUR[phase];
-    if(prog>=1){prog=0;phase=(phase+1)%3;}
-
-    cx2.fillStyle=COL_BG;cx2.fillRect(0,0,160,160);
-
-    const t=prog;
-
-    if(phase===0){
-      // Draw circle building up
-      const nVisible=Math.round(circlePx.length*t);
-      for(let i=0;i<nVisible;i++)dp(circlePx[i][0],circlePx[i][1],COL_CIRCLE);
-      // S at center
-      drawLetter('S',Math.round(CCX)-1,Math.round(CCY)-2,COL_S);
-    }
-    else if(phase===1){
-      // Full circle (but gap where S exits - cut top pixel)
-      for(let i=0;i<circlePx.length;i++){
-        const [px,py]=circlePx[i];
-        // Gap at top for S to escape (angle near -PI/2)
-        const ang=Math.atan2(py-CCY,px-CCX);
-        const gapT=t<0.08?t/0.08:1; // gap opens quickly
-        const gapSize=gapT*0.45;
-        const inGap=Math.abs(ang+Math.PI/2)<gapSize;
-        if(!inGap)dp(px,py,COL_CIRCLE);
-      }
-      // S orbiting
-      let sx,sy;
-      if(t<0.1){const [bx,by]=getSBreak(t/0.1);sx=Math.round(bx);sy=Math.round(by);}
-      else{const [ox,oy]=getSOrbit((t-0.1)/0.9);sx=Math.round(ox);sy=Math.round(oy);}
-      drawLetter('S',sx,sy,COL_S);
-    }
-    else{
-      // S returning to center, circle closing gap
-      const gapClose=t;
-      for(let i=0;i<circlePx.length;i++){
-        const [px,py]=circlePx[i];
-        const ang=Math.atan2(py-CCY,px-CCX);
-        const gapSize=(1-gapClose)*0.45;
-        const inGap=Math.abs(ang+Math.PI/2)<gapSize;
-        if(!inGap)dp(px,py,COL_CIRCLE);
-      }
-      // S moving back in
-      if(t<0.7){const [rx,ry]=getSReturn(t/0.7);drawLetter('S',Math.round(rx),Math.round(ry),COL_S);}
-      else{drawLetter('S',Math.round(CCX)-1,Math.round(CCY)-2,COL_S);}
-    }
-
-    drawWordmark();
-    raf=requestAnimationFrame(frame);
-  }
-  raf=requestAnimationFrame(frame);
-  // cleanup when element removed
-  const obs=new MutationObserver(()=>{if(!document.contains(c)){cancelAnimationFrame(raf);obs.disconnect();}});
-  obs.observe(document.body,{childList:true,subtree:true});
-
+  w.appendChild(mk('div',{class:'loading-logo',text:'socialbox'}));
+  const dots=mk('div',{class:'loading-dots'});
+  for(let i=0;i<3;i++)dots.appendChild(mk('div',{class:'loading-dot'}));
+  w.appendChild(dots);
   return w;
 }
 
@@ -1729,10 +1584,10 @@ function renderComposeBar(){
     try{
       let mediaUrl=null;
       if(file){
-        const compressed=await compressImage(file);
-        const ext=compressed.type==='image/jpeg'?'jpg':file.name.split('.').pop();
+        const cf=await compressImage(file);
+        const ext=cf.type==='image/jpeg'?'jpg':file.name.split('.').pop();
         const path=`${S.user.id}/${Date.now()}.${ext}`;
-        const {error:ue}=await sb.storage.from('media').upload(path,compressed,{cacheControl:'3600'});
+        const {error:ue}=await sb.storage.from('media').upload(path,cf,{cacheControl:'3600'});
         if(!ue){const {data:{publicUrl}}=sb.storage.from('media').getPublicUrl(path);mediaUrl=publicUrl;}
       }
       await sb.from('posts').insert({user_id:S.user.id,content:content.trim(),media_url:mediaUrl,media_type:mtype});
@@ -2403,7 +2258,7 @@ function renderExploreView(){
         if(p.id!==S.profile?.id){
           const isF=myF.has(p.id);
           const fb=mk('button',{class:'explore-res-follow-btn'+(isF?' following':''),text:isF?'Following':'Follow'});
-          fb.onclick=async e2=>{e2.stopPropagation();await handleFollow(p.id);fb.textContent=myF.has(p.id)?'Follow':'Following';fb.className='explore-res-follow-btn'+(myF.has(p.id)?'':' following');};
+          fb.onclick=async e2=>{e2.stopPropagation();await handleFollow(p.id);render();};
           row.appendChild(fb);
         }
         view.appendChild(row);
@@ -2735,114 +2590,226 @@ function renderEditProfile(){
 // ═══════════════════════════════════════════════════════════════════════
 function renderDmView(){
   const view=mk('div',{class:'dm-view',style:'flex:1'});
+
+  // ── LEFT: Inbox list ─────────────────────────────────
   const left=mk('div',{class:'dm-list'});
+
   const lhd=mk('div',{class:'dm-list-header'});
-  lhd.appendChild(mk('span',{class:'dm-list-title',text:S.profile?.username||'Messages'}));
-  const cb=mk('button',{class:'dm-compose-btn'});
-  cb.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`;
-  lhd.appendChild(cb);left.appendChild(lhd);
+  const htitle=mk('div',{style:'display:flex;flex-direction:column;gap:2px;flex:1'});
+  htitle.appendChild(mk('div',{class:'dm-list-title',text:'Inbox'}));
+  htitle.appendChild(mk('div',{style:'font-size:11px;color:var(--text3)',text:(S.follows.filter(f=>f.follower_id===S.profile?.id).length)+' conversations'}));
+  lhd.appendChild(htitle);
+  const compBtn=mk('button',{class:'dm-compose-btn',title:'New message'});
+  compBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+  lhd.appendChild(compBtn);
+  left.appendChild(lhd);
+
+  // Search bar
+  const srchWrap=mk('div',{style:'padding:8px 12px;border-bottom:1px solid var(--border)'});
+  const srchInp=mk('input',{type:'search',placeholder:'Search messages...',style:'width:100%;background:var(--bg3);border:none;border-radius:16px;padding:7px 12px 7px 32px;font-size:12px;color:var(--text);outline:none;font-family:inherit'});
+  const srchWrapInner=mk('div',{style:'position:relative'});
+  srchWrapInner.innerHTML=`<svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`;
+  srchWrapInner.appendChild(srchInp);
+  srchWrap.appendChild(srchWrapInner);
+  left.appendChild(srchWrap);
 
   const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
-  const convProfiles=S.profiles.filter(p=>p.id!==S.profile?.id&&myF.has(p.id));
-  const convs=mk('div',{class:'dm-conversations'});
-  convProfiles.forEach(p=>{
-    const item=mk('div',{class:'dm-conv-item'+(S.activeDm===p.id?' active':'')});
-    const avW=mk('div',{class:'dm-conv-av',style:'position:relative'});
-    avW.appendChild(buildAv(p,44,''));
-    item.appendChild(avW);
-    const ci=mk('div',{class:'dm-conv-info'});
-    ci.appendChild(mk('div',{class:'dm-conv-name',text:p.display_name||p.username}));
-    ci.appendChild(mk('div',{class:'dm-conv-last',text:'Say hi! 👋'}));
-    item.appendChild(ci);
-    const cm=mk('div',{class:'dm-conv-meta'});
-    cm.appendChild(mk('div',{class:'dm-conv-time',text:'now'}));
-    item.appendChild(cm);
-    item.onclick=()=>{S.activeDm=p.id;render();};
-    convs.appendChild(item);
-  });
-  if(convProfiles.length===0){
-    const emp=mk('div',{class:'dm-empty-state'});
-    emp.innerHTML=`<div class="dm-empty-icon">✉️</div><div class="dm-empty-title">No messages</div><div class="dm-empty-sub">Follow people to start messaging them</div>`;
-    convs.appendChild(emp);
-  }
-  left.appendChild(convs);view.appendChild(left);
+  let convProfiles=S.profiles.filter(p=>p.id!==S.profile?.id&&myF.has(p.id));
 
-  // Chat
+  const convs=mk('div',{class:'dm-conversations'});
+
+  function renderConvList(filter=''){
+    convs.innerHTML='';
+    const filtered=filter?convProfiles.filter(p=>(p.display_name||p.username).toLowerCase().includes(filter.toLowerCase())):convProfiles;
+    if(filtered.length===0){
+      const emp=mk('div',{class:'dm-empty-state'});
+      emp.innerHTML=filter
+        ?`<div style="font-size:32px">🔍</div><div class="dm-empty-title" style="font-size:14px">No results</div>`
+        :`<div class="dm-empty-icon">✉️</div><div class="dm-empty-title">Empty inbox</div><div class="dm-empty-sub">Follow people to message them</div>`;
+      convs.appendChild(emp);return;
+    }
+    filtered.forEach((p,idx)=>{
+      const msgs=S.msgs[p.id]||[];
+      const last=msgs[msgs.length-1];
+      const isActive=S.activeDm===p.id;
+      const unread=!isActive&&msgs.filter(m=>m.sender!==S.user.id&&!m.read).length;
+
+      const item=mk('div',{class:'dm-conv-item'+(isActive?' active':'')+(unread?' unread':'')});
+      item.style.cssText='display:flex;align-items:flex-start;gap:10px;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .15s;position:relative';
+      item.onmouseenter=()=>{if(!isActive)item.style.background='var(--bg2)';};
+      item.onmouseleave=()=>{if(!isActive)item.style.background='';};
+
+      // Avatar with online indicator
+      const avWrap=mk('div',{style:'position:relative;flex-shrink:0'});
+      avWrap.appendChild(buildAv(p,40,''));
+      if(idx<3){// show as online for demo
+        const dot=mk('div',{style:'position:absolute;bottom:1px;right:1px;width:10px;height:10px;border-radius:50%;background:var(--green);border:2px solid var(--bg1)'});
+        avWrap.appendChild(dot);
+      }
+      item.appendChild(avWrap);
+
+      const info=mk('div',{style:'flex:1;min-width:0'});
+      const row1=mk('div',{style:'display:flex;align-items:baseline;justify-content:space-between;margin-bottom:3px'});
+      const name=mk('div',{style:`font-size:13px;font-weight:${unread?700:500};color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px`,text:p.display_name||p.username});
+      const time=mk('div',{style:'font-size:10px;color:var(--text3);flex-shrink:0;font-family:"DM Mono",monospace',text:last?timeAgo(last.ts):'now'});
+      row1.appendChild(name);row1.appendChild(time);
+      info.appendChild(row1);
+
+      const preview=mk('div',{style:`font-size:12px;color:${unread?'var(--text2)':'var(--text3)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${unread?600:400}`,
+        text:last?(last.sender===S.user.id?'You: '+last.text:last.text):'Say hi! 👋'});
+      info.appendChild(preview);
+
+      // unread badge
+      if(unread){
+        const badge=mk('div',{style:'position:absolute;right:12px;bottom:14px;background:var(--accent);color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 4px',text:String(unread)});
+        item.appendChild(badge);
+      }
+
+      item.appendChild(info);
+      item.onclick=()=>{S.activeDm=p.id;render();};
+      convs.appendChild(item);
+    });
+  }
+
+  srchInp.oninput=e=>renderConvList(e.target.value);
+  renderConvList();
+  left.appendChild(convs);
+  view.appendChild(left);
+
+  // ── RIGHT: Chat / Reading pane ───────────────────────
   const chat=mk('div',{class:'dm-chat'});
+
   if(!S.activeDm){
-    const emp=mk('div',{class:'dm-chat-empty'});
-    emp.innerHTML=`<div class="dm-chat-empty-icon">💬</div><div class="dm-chat-empty-text">Your messages</div><div class="dm-chat-empty-sub">Send private messages to friends and people you follow</div>`;
+    // Empty state - mailbox style
+    const emp=mk('div',{style:'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text3);padding:40px'});
+    emp.innerHTML=`
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="color:var(--border3)">
+        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+        <polyline points="22,6 12,13 2,6"/>
+      </svg>
+      <div style="font-size:18px;font-weight:700;color:var(--text2)">Select a conversation</div>
+      <div style="font-size:13px;text-align:center;line-height:1.6;max-width:220px">Choose from your inbox on the left to start reading</div>`;
     chat.appendChild(emp);
   } else {
-    const activePro=S.profiles.find(p=>p.id===S.activeDm);
-    const chd=mk('div',{class:'dm-chat-header'});
-    const cav=buildAv(activePro,36,'dm-chat-av');cav.style.cursor='pointer';cav.onclick=()=>goProfile(S.activeDm);
-    chd.appendChild(cav);
-    const cn=mk('div',{class:'dm-chat-name',text:activePro?.display_name||activePro?.username||''});
-    cn.onclick=()=>goProfile(S.activeDm);chd.appendChild(cn);
-    const cacts=mk('div',{class:'dm-chat-actions'});
-    [
-      `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.99 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.92 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`,
-      `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>`,
-    ].forEach(ico=>{
-      const b=mk('button',{class:'dm-chat-action-btn',html:ico});
-      b.onclick=()=>toast('Video/voice call coming soon!');
-      cacts.appendChild(b);
-    });
-    chd.appendChild(cacts);chat.appendChild(chd);
-
-    const msgs=mk('div',{class:'dm-messages'});
+    const activePro=S.profiles.find(p=>p.id===S.activeDm)||{username:'unknown'};
     const convMsgs=S.msgs[S.activeDm]||[];
+
+    // Header - email style
+    const chd=mk('div',{style:'padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg1);display:flex;align-items:center;gap:12px;flex-shrink:0'});
+
+    const headerLeft=mk('div',{style:'display:flex;align-items:center;gap:10px;flex:1;min-width:0'});
+    const hav=buildAv(activePro,38,'');hav.style.cursor='pointer';hav.onclick=()=>goProfile(S.activeDm);
+    headerLeft.appendChild(hav);
+    const hmeta=mk('div',{style:'flex:1;min-width:0'});
+    const hname=mk('div',{style:'font-size:14px;font-weight:600;cursor:pointer',text:activePro.display_name||activePro.username});
+    hname.onclick=()=>goProfile(S.activeDm);
+    const hsub=mk('div',{style:'font-size:11px;color:var(--text3);font-family:"DM Mono",monospace',text:'@'+activePro.username+' · '+convMsgs.length+' message'+(convMsgs.length!==1?'s':'')});
+    hmeta.appendChild(hname);hmeta.appendChild(hsub);
+    headerLeft.appendChild(hmeta);
+    chd.appendChild(headerLeft);
+
+    // Header actions
+    const hacts=mk('div',{style:'display:flex;gap:4px'});
+    [{ico:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.99 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.92 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>',label:'Call'},
+     {ico:'<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',label:'Video'},
+     {ico:'<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',label:'More'},
+    ].forEach(({ico,label})=>{
+      const b=mk('button',{class:'dm-chat-action-btn',title:label});
+      b.innerHTML=`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ico}</svg>`;
+      b.onclick=()=>toast(`${label} coming soon`);
+      hacts.appendChild(b);
+    });
+    chd.appendChild(hacts);
+    chat.appendChild(chd);
+
+    // Messages
+    const msgs=mk('div',{class:'dm-messages'});
     if(convMsgs.length===0){
-      msgs.appendChild(mk('div',{class:'dm-day-divider',text:'Start of conversation'}));
-      const greeting=mk('div',{class:'dm-msg theirs',style:'align-items:center;justify-content:center'});
-      const greetBubble=mk('div',{class:'dm-msg-bubble',style:'background:var(--bg3);color:var(--text2);text-align:center;padding:12px 20px'});
-      greetBubble.textContent='👋 Say hello to '+( activePro?.username||'them')+'!';
-      greeting.appendChild(greetBubble);msgs.appendChild(greeting);
+      msgs.appendChild(mk('div',{class:'dm-day-divider',text:'New conversation'}));
+      const gr=mk('div',{style:'display:flex;justify-content:center;padding:20px 0'});
+      const gb=mk('div',{style:'background:var(--bg3);border:1px solid var(--border2);border-radius:16px;padding:14px 20px;font-size:13px;color:var(--text2);text-align:center'});
+      gb.innerHTML=`<div style="font-size:28px;margin-bottom:8px">👋</div><div style="font-weight:600;margin-bottom:4px">${activePro.display_name||activePro.username}</div><div style="color:var(--text3);font-size:12px">Send them a message!</div>`;
+      gr.appendChild(gb);msgs.appendChild(gr);
     } else {
+      let lastDate='';
       convMsgs.forEach(msg=>{
+        const d=new Date(msg.ts).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});
+        if(d!==lastDate){msgs.appendChild(mk('div',{class:'dm-day-divider',text:d}));lastDate=d;}
         const isMine=msg.sender===S.user.id;
         const mEl=mk('div',{class:'dm-msg '+(isMine?'mine':'theirs')});
+        if(!isMine){
+          const mav=buildAv(activePro,24,'');
+          mav.style.cssText='flex-shrink:0;margin-top:2px;align-self:flex-end';
+          mEl.style.cssText='align-items:flex-end;flex-direction:row;gap:6px;display:flex';
+          mEl.appendChild(mav);
+        }
         const bubble=mk('div',{class:'dm-msg-bubble',text:msg.text});
-        mEl.appendChild(bubble);
-        mEl.appendChild(mk('div',{class:'dm-msg-meta',text:timeAgo(msg.ts)}));
+        const meta=mk('div',{class:'dm-msg-meta',text:timeAgo(msg.ts)});
+        const bwrap=mk('div',{style:'display:flex;flex-direction:column;gap:2px;'+(isMine?'align-items:flex-end':'align-items:flex-start')});
+        bwrap.appendChild(bubble);bwrap.appendChild(meta);
+        mEl.appendChild(bwrap);
         msgs.appendChild(mEl);
       });
     }
-    msgs.scrollTop=msgs.scrollHeight;
+    setTimeout(()=>msgs.scrollTop=msgs.scrollHeight,0);
     chat.appendChild(msgs);
 
-    // Input
-    const ia=mk('div',{class:'dm-input-area'});
-    const iacts=mk('div',{class:'dm-input-actions'});
-    [
-      `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
-      `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`,
-    ].forEach(ico=>{
-      const b=mk('button',{class:'dm-input-action',html:ico});
-      iacts.appendChild(b);
-    });
-    ia.appendChild(iacts);
-    const iw=mk('div',{class:'dm-inp-wrap'});
-    const inp=mk('textarea',{class:'dm-inp',placeholder:'Message...'});
-    inp.rows=1;
-    inp.oninput=()=>{inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,120)+'px';sendBtn.disabled=!inp.value.trim();};
-    inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}};
-    iw.appendChild(inp);ia.appendChild(iw);
-    const sendBtn=mk('button',{class:'dm-send-btn'});
-    sendBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
+    // Compose input area - email style
+    const ia=mk('div',{style:'border-top:1px solid var(--border);background:var(--bg1);flex-shrink:0'});
+
+    // "To" bar
+    const toBar=mk('div',{style:'padding:8px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px'});
+    toBar.appendChild(mk('span',{style:'font-size:11px;color:var(--text3);font-weight:600;font-family:"DM Mono",monospace',text:'TO'}));
+    const toChip=mk('div',{style:'background:var(--bg3);border-radius:12px;padding:3px 10px;font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px'});
+    toChip.appendChild(buildAv(activePro,16,''));
+    toChip.appendChild(mk('span',{text:activePro.display_name||activePro.username}));
+    toBar.appendChild(toChip);
+    ia.appendChild(toBar);
+
+    // Textarea
+    const taWrap=mk('div',{style:'padding:10px 16px 6px'});
+    const inp=mk('textarea',{class:'dm-inp',placeholder:'Write a message...',style:'border-radius:8px'});
+    inp.rows=3;
+    inp.oninput=()=>{sendBtn.disabled=!inp.value.trim();};
+    inp.onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendBtn.click();}};
+    taWrap.appendChild(inp);ia.appendChild(taWrap);
+
+    // Bottom toolbar
+    const toolbar=mk('div',{style:'padding:6px 16px 12px;display:flex;align-items:center;gap:6px'});
+    const sendBtn=mk('button',{style:'padding:7px 18px;background:var(--accent);color:#fff;border:none;border-radius:20px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .18s;display:flex;align-items:center;gap:6px'});
+    sendBtn.innerHTML=`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send`;
     sendBtn.disabled=true;
+    sendBtn.onmouseenter=()=>sendBtn.style.background='var(--accent2)';
+    sendBtn.onmouseleave=()=>sendBtn.style.background='var(--accent)';
     sendBtn.onclick=()=>{
       const txt=inp.value.trim();if(!txt)return;
       if(!S.msgs[S.activeDm])S.msgs[S.activeDm]=[];
       S.msgs[S.activeDm].push({sender:S.user.id,text:txt,ts:new Date().toISOString()});
-      inp.value='';inp.style.height='auto';sendBtn.disabled=true;
-      // Refresh messages
+      inp.value='';sendBtn.disabled=true;
       const msgEl=chat.querySelector('.dm-messages');
-      if(msgEl){const m=mk('div',{class:'dm-msg mine'});const b=mk('div',{class:'dm-msg-bubble',text:txt});m.appendChild(b);msgEl.appendChild(m);msgEl.scrollTop=msgEl.scrollHeight;}
+      if(msgEl){
+        const mEl=mk('div',{class:'dm-msg mine'});
+        const bwrap=mk('div',{style:'display:flex;flex-direction:column;align-items:flex-end;gap:2px'});
+        bwrap.appendChild(mk('div',{class:'dm-msg-bubble',text:txt}));
+        bwrap.appendChild(mk('div',{class:'dm-msg-meta',text:'just now'}));
+        mEl.appendChild(bwrap);
+        msgEl.appendChild(mEl);msgEl.scrollTop=msgEl.scrollHeight;
+      }
     };
-    ia.appendChild(sendBtn);chat.appendChild(ia);
+    toolbar.appendChild(sendBtn);
+    const hint=mk('span',{style:'font-size:11px;color:var(--text3);margin-left:8px',text:'Ctrl+Enter to send'});
+    toolbar.appendChild(hint);
+
+    // Attach btn
+    const attBtn=mk('button',{style:'margin-left:auto;background:none;border:none;color:var(--text3);cursor:pointer;padding:6px;border-radius:8px;display:flex;align-items:center;transition:color .18s',title:'Attach'});
+    attBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`;
+    attBtn.onmouseenter=()=>attBtn.style.color='var(--accent2)';
+    attBtn.onmouseleave=()=>attBtn.style.color='var(--text3)';
+    toolbar.appendChild(attBtn);
+    ia.appendChild(toolbar);
+    chat.appendChild(ia);
   }
+
   view.appendChild(chat);
   return view;
 }
@@ -2923,7 +2890,7 @@ function renderUploadModal(type){
   if(type==='post'){
     body.appendChild(mk('label',{class:'create-form-label',text:'Caption'}));
     const cap=mk('textarea',{class:'create-form-ta',placeholder:"Write a caption..."});cap.rows=3;
-    cap.oninput=e=>caption=e.target.value;body.appendChild(cap);
+    cap.oninput=e=>{caption=e.target.value;submitBtn.disabled=!caption.trim()&&!file;};body.appendChild(cap);
   }
   modal.appendChild(body);
 
@@ -2936,6 +2903,7 @@ function renderUploadModal(type){
 
   submitBtn.onclick=async()=>{
     if(!file&&type==='story'){toast('Select a photo or video first','error');return;}
+    if(!file&&type==='post'&&!caption.trim()){toast('Write something or add a photo','error');return;}
     submitBtn.disabled=true;submitBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Uploading...`;
     prog.style.display='block';pf.style.width='30%';
     try{
@@ -2943,8 +2911,8 @@ function renderUploadModal(type){
       if(file){
         const path=`${S.user.id}/${Date.now()}.${file.name.split('.').pop()}`;
         pf.style.width='60%';
-        const compressed2=await compressImage(file);
-        const {error:ue}=await sb.storage.from('media').upload(path,compressed2,{cacheControl:'3600'});
+        const cf2=await compressImage(file);
+        const {error:ue}=await sb.storage.from('media').upload(path,cf2,{cacheControl:'3600'});
         if(ue)throw ue;
         const {data:{publicUrl}}=sb.storage.from('media').getPublicUrl(path);
         mediaUrl=publicUrl;pf.style.width='80%';
@@ -3015,8 +2983,7 @@ function renderReelModal(){
       let videoUrl=null;
       if(file){
         const path=`${S.user.id}/${Date.now()}.${file.name.split('.').pop()}`;
-        const compressed3=await compressImage(file,1920,0.88);
-        const {error}=await sb.storage.from('media').upload(path,compressed3);
+        const {error}=await sb.storage.from('media').upload(path,file);
         if(error)throw error;
         const {data:{publicUrl}}=sb.storage.from('media').getPublicUrl(path);
         videoUrl=publicUrl;
