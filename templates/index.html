@@ -1,0 +1,2120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<title>Socialbox</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+'use strict';
+
+// Add this line right here
+console.log('=== SCRIPT STARTED ===');
+window.onerror = function(msg, url, line) {
+  console.error('GLOBAL ERROR:', msg, 'at line', line);
+  toast('Script error: ' + msg, 'error');
+  return false;
+};;
+
+function compressImage(file,maxW=1080,quality=0.80){
+  return new Promise(resolve=>{
+    if(!file.type.startsWith('image/')){resolve(file);return;}
+    const img=new Image(),url=URL.createObjectURL(file);
+    img.onload=()=>{
+      URL.revokeObjectURL(url);
+      const scale=Math.min(1,maxW/Math.max(img.width,img.height));
+      const w=Math.round(img.width*scale),h=Math.round(img.height*scale);
+      const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+      cv.getContext('2d').drawImage(img,0,0,w,h);
+      cv.toBlob(b=>resolve(new File([b],file.name.replace(/\.[^.]+$/,'.jpg'),{type:'image/jpeg'})),'image/jpeg',quality);
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);resolve(file);};
+    img.src=url;
+  });
+}
+'use strict';
+
+function compressImage(file,maxW=1080,quality=0.80){
+  // ... compressImage code ...
+}
+
+function uploadWithTimeout(bucket, path, file, opts = {}, timeoutMs = 30000) {
+  console.log('1. Starting uploadWithTimeout for:', path);
+  console.log('2. File type:', file.type, 'size:', file.size);
+  
+  const controller = new AbortController();
+  const signal = controller.signal;
+  
+  const timeoutId = setTimeout(() => {
+    console.log('3. Upload timed out, aborting...');
+    controller.abort();
+  }, timeoutMs);
+
+  const uploadOpts = {
+    ...opts,
+    abortSignal: signal
+  };
+
+  console.log('4. Calling supabase storage upload...');
+  
+  return sb.storage.from(bucket).upload(path, file, uploadOpts)
+    .then(result => {
+      console.log('5. Upload successful:', result);
+      clearTimeout(timeoutId);
+      return result;
+    })
+    .catch(error => {
+      console.log('6. Upload failed with error:', error);
+      clearTimeout(timeoutId);
+      
+      // Log the full error object
+      console.log('Error name:', error.name);
+      console.log('Error message:', error.message);
+      console.log('Error status:', error.status);
+      console.log('Error details:', error);
+      
+      if (error.name === 'AbortError' || error.message?.includes('abort')) {
+        throw new Error(`Upload timed out after ${timeoutMs/1000} seconds. Try a smaller file or better connection.`);
+      }
+      throw error;
+    });
+}
+async function uploadMedia(file,userId){
+  console.log('uploadMedia called with file:', file ? file.name : 'no file');
+  console.log('User ID:', userId);
+  
+  try {
+    console.log('1. Starting compressImage...');
+    const cf = await compressImage(file);
+    console.log('2. compressImage complete. New file size:', cf.size, 'type:', cf.type);
+    
+    const ext = cf.type === 'image/jpeg' ? 'jpg' : file.name.split('.').pop();
+    const path = `${userId}/${Date.now()}.${ext}`;
+    console.log('3. Generated path:', path);
+    
+    console.log('4. Calling uploadWithTimeout...');
+    const result = await uploadWithTimeout('media', path, cf, { cacheControl: '3600' });
+    console.log('5. uploadWithTimeout result:', result);
+    
+    if (result.error) {
+      console.error('6. Result contains error:', result.error);
+      throw new Error(result.error.message || 'Upload failed');
+    }
+    
+    console.log('7. Getting public URL...');
+    const publicUrl = sb.storage.from('media').getPublicUrl(path).data.publicUrl;
+    console.log('8. Public URL:', publicUrl);
+    
+    return publicUrl;
+    
+  } catch (error) {
+    console.error('9. ERROR in uploadMedia:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    throw error;
+  }
+
+  
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════════════════════════════════
+const SUPABASE_URL  = 'https://uarmuzwvluqmpsvvdwir.supabase.co';
+const SUPABASE_ANON = 'sb_publishable_-giDe1inBdQufvJV1zcypg_d9DggAN8';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+const COLORS = ['#6366f1','#22c55e','#ef4444','#f59e0b','#a78bfa','#38bdf8','#fb7185','#34d399','#f97316','#06b6d4'];
+const STORY_DURATION = 5000;
+const MAX_POST = 2200;
+const MAX_BIO  = 150;
+
+// ═══════════════════════════════════════════════════════════════════════
+//  UTILITIES
+// ═══════════════════════════════════════════════════════════════════════
+const colorFor = s => { let h=0; for(const c of (s||'?')) h=(h*31+c.charCodeAt(0))%COLORS.length; return COLORS[h]; };
+const initials = s => { const p=(s||'?').split(/[\s_]+/); return p.length>=2?(p[0][0]+p[1][0]).toUpperCase():(s||'?').slice(0,2).toUpperCase(); };
+const fmtCount = n => n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n||0);
+const qs = (s,el=document)=>el.querySelector(s);
+const qsa = (s,el=document)=>[...el.querySelectorAll(s)];
+
+function timeAgo(ts) {
+  const s=Math.floor((Date.now()-new Date(ts))/1000);
+  if(s<5)return'just now';if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';
+  if(s<86400)return Math.floor(s/3600)+'h';if(s<604800)return Math.floor(s/86400)+'d';
+  return new Date(ts).toLocaleDateString([],{month:'short',day:'numeric'});
+}
+
+function parseContent(txt) {
+  return (txt||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/#(\w+)/g,'<span class="hashtag">#$1</span>')
+    .replace(/@(\w+)/g,'<span class="mention">@$1</span>');
+}
+
+function getFbEmbed(url) {
+  if(!url)return null;
+  const u=url.trim();
+  if(u.includes('plugins/video.php'))return u;
+  return`https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(u)}&width=500&show_text=false&height=700`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  DOM HELPERS
+// ═══════════════════════════════════════════════════════════════════════
+function mk(tag, attrs={}, ...kids) {
+  const el=document.createElement(tag);
+  for(const [k,v] of Object.entries(attrs)){
+    if(k==='class')el.className=v;
+    else if(k==='html')el.innerHTML=v;
+    else if(k==='text')el.textContent=v;
+    else if(k.startsWith('on')&&typeof v==='function')el.addEventListener(k.slice(2),v);
+    else if(k==='style'&&typeof v==='object')Object.assign(el.style,v);
+    else el.setAttribute(k,v);
+  }
+  for(const c of kids){
+    if(!c)continue;
+    if(typeof c==='string')el.appendChild(document.createTextNode(c));
+    else el.appendChild(c);
+  }
+  return el;
+}
+
+function mkSvg(paths, vb='0 0 24 24', fill='none', sw='2') {
+  const s=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  s.setAttribute('viewBox',vb); s.setAttribute('fill',fill);
+  s.setAttribute('stroke','currentColor'); s.setAttribute('stroke-width',sw);
+  s.setAttribute('stroke-linecap','round'); s.setAttribute('stroke-linejoin','round');
+  s.innerHTML=paths; return s;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TOAST
+// ═══════════════════════════════════════════════════════════════════════
+let _tc;
+function initToasts(){ _tc=mk('div',{class:'toast-container'}); document.body.appendChild(_tc); }
+function toast(msg,type='default',dur=3000){
+  const icons={success:'✅',error:'❌',info:'ℹ️',default:'💬'};
+  const t=mk('div',{class:`toast-item ${type}`},
+    mk('span',{class:'toast-icon',text:icons[type]||'💬'}),
+    mk('span',{class:'toast-text',text:msg}),
+    mk('button',{class:'toast-close',text:'×',onclick:()=>t.remove()})
+  );
+  _tc.appendChild(t);
+  setTimeout(()=>{t.style.animation='notifSlide .3s ease reverse';setTimeout(()=>t.remove(),280);},dur);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════════════
+let S={
+  user:null,profile:null,
+  page:'feed',sub:'posts',
+  posts:[],stories:[],reels:[],profiles:[],follows:[],
+  postLikes:new Set(),reelLikes:new Set(),saved:new Set(),
+  notifs:[],comments:{},
+  dms:[],msgs:{},activeDm:null,
+  viewUser:null,
+  storyViewer:null,storyMuted:false,
+  modal:null,commentsOpen:null,lightbox:null,
+  editOpen:false,followModal:null,ctxMenu:null,
+  sbCollapsed:false,
+  searchQ:'',searchRes:{users:[],tags:[]},
+  loading:true,
+};
+let rtChannels=[];
+let storyTimer=null;
+let iObservers=[];
+
+// ═══════════════════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════════════════
+function render(){
+  // Cleanup old observers
+  iObservers.forEach(o=>o.disconnect()); iObservers=[];
+  const root=qs('#root'); root.innerHTML='';
+  if(S.loading){root.appendChild(renderLoading());return;}
+  if(!S.user){root.appendChild(renderAuth());return;}
+  root.appendChild(renderApp());
+  if(S.storyViewer)document.body.appendChild(renderStoryViewer());
+  if(S.modal)document.body.appendChild(renderModal());
+  if(S.commentsOpen!==null)document.body.appendChild(renderCommentsSheet());
+  if(S.lightbox)document.body.appendChild(renderLightbox());
+  if(S.editOpen)document.body.appendChild(renderEditProfile());
+  if(S.followModal)document.body.appendChild(renderFollowModal());
+  if(S.ctxMenu)document.body.appendChild(renderCtxMenu());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  LOADING
+// ═══════════════════════════════════════════════════════════════════════
+function renderLoading(){
+  const w=mk('div',{class:'loading-screen'});
+  w.appendChild(mk('div',{class:'loading-logo',text:'socialbox'}));
+  const dots=mk('div',{class:'loading-dots'});
+  for(let i=0;i<3;i++)dots.appendChild(mk('div',{class:'loading-dot'}));
+  w.appendChild(dots);
+  return w;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  AUTH
+// ═══════════════════════════════════════════════════════════════════════
+function renderAuth(){
+  let tab='login',sp=false,sp2=false;
+  let f={user:'',dname:'',pass:'',conf:''};
+  const screen=mk('div',{class:'auth-screen'});
+
+  // Left panel
+  const left=mk('div',{class:'auth-left'});
+  const mock=mk('div',{class:'auth-mockup'});
+  const ms=mk('div',{class:'auth-mockup-screen'});
+  const sr=mk('div',{class:'auth-mockup-story'});
+  for(let i=0;i<4;i++){
+    const ri=mk('div',{class:'auth-mockup-story-item'});
+    ri.appendChild(mk('div',{class:'auth-mockup-story-inner'}));
+    sr.appendChild(ri);
+  }
+  ms.appendChild(sr);
+  for(let i=0;i<2;i++){
+    const p=mk('div',{class:'auth-mockup-post'});
+    p.appendChild(mk('div',{class:'auth-mockup-post-img'}));
+    const a=mk('div',{class:'auth-mockup-post-actions'});
+    a.appendChild(mk('div',{class:'auth-mockup-heart'}));
+    a.appendChild(mk('div',{class:'auth-mockup-comment'}));
+    p.appendChild(a); ms.appendChild(p);
+  }
+  mock.appendChild(ms); left.appendChild(mock);
+  const tag=mk('div',{class:'auth-tagline'});
+  tag.innerHTML='Share your world.<br><span>Connect & inspire.</span>';
+  left.appendChild(tag); screen.appendChild(left);
+
+  // Right panel
+  const right=mk('div',{class:'auth-right'});
+  const msgDiv=mk('div',{});
+  right.appendChild(msgDiv);
+  const showErr=m=>{msgDiv.innerHTML='';msgDiv.appendChild(mk('div',{class:'auth-err',text:m}));};
+  const showOk=m=>{msgDiv.innerHTML='';msgDiv.appendChild(mk('div',{class:'auth-ok',text:m}));};
+  const clearMsg=()=>msgDiv.innerHTML='';
+
+  function build(){
+    [...right.children].filter(c=>c!==msgDiv).forEach(c=>c.remove());
+    clearMsg();
+    const logo=mk('div',{class:'auth-logo'}); logo.innerHTML='social<span>box</span>';
+    right.insertBefore(logo,msgDiv);
+    right.insertBefore(mk('div',{class:'auth-sub',text:'Sign up to see photos and videos.'}),msgDiv);
+
+    const tabs=mk('div',{class:'auth-tabs'});
+    ['login','create'].forEach(t=>{
+      const b=mk('button',{class:'auth-tab'+(tab===t?' active':''),text:t==='login'?'Log in':'Sign up'});
+      b.onclick=()=>{tab=t;build();}; tabs.appendChild(b);
+    });
+    right.appendChild(tabs);
+
+    // Facebook
+    const fb=mk('button',{class:'auth-fb-btn'});
+    fb.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff"><path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg> Continue with Facebook`;
+    fb.onclick=async()=>{
+      fb.disabled=true; fb.textContent='Connecting...';
+      const {error}=await sb.auth.signInWithOAuth({provider:'facebook',options:{redirectTo:window.location.href}});
+      if(error){showErr(error.message);fb.disabled=false;}
+    };
+    right.appendChild(fb);
+
+    // Divider
+    const div=mk('div',{class:'auth-divider'});
+    div.appendChild(mk('div',{class:'auth-divider-line'}));
+    div.appendChild(mk('div',{class:'auth-divider-text',text:'OR'}));
+    div.appendChild(mk('div',{class:'auth-divider-line'}));
+    right.appendChild(div);
+
+    const form=mk('div',{class:'auth-form'});
+
+    if(tab==='create'){
+      form.appendChild(mk('label',{class:'auth-lbl',text:'Display name'}));
+      const di=mk('input',{class:'auth-inp',placeholder:'Your Name',type:'text',value:f.dname});
+      di.oninput=e=>f.dname=e.target.value; form.appendChild(di);
+    }
+
+    form.appendChild(mk('label',{class:'auth-lbl',text:'Username'}));
+    const ui=mk('input',{class:'auth-inp',placeholder:'username',type:'text',value:f.user,autocomplete:'username'});
+    ui.oninput=e=>f.user=e.target.value.toLowerCase().replace(/\s/g,'');
+    form.appendChild(ui);
+
+    form.appendChild(mk('label',{class:'auth-lbl',text:'Password'}));
+    const pw=mk('div',{class:'auth-inp-wrap'});
+    const pi=mk('input',{class:'auth-inp',placeholder:'6+ characters',type:sp?'text':'password',value:f.pass});
+    pi.oninput=e=>f.pass=e.target.value;
+    const eye=mk('button',{class:'auth-inp-eye',type:'button'});
+    eye.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    eye.onclick=()=>{sp=!sp;pi.type=sp?'text':'password';};
+    pw.appendChild(pi); pw.appendChild(eye); form.appendChild(pw);
+
+    if(tab==='create'){
+      form.appendChild(mk('label',{class:'auth-lbl',text:'Confirm password'}));
+      const cw=mk('div',{class:'auth-inp-wrap'});
+      const ci=mk('input',{class:'auth-inp',placeholder:'Repeat password',type:sp2?'text':'password',value:f.conf});
+      ci.oninput=e=>f.conf=e.target.value;
+      const eye2=mk('button',{class:'auth-inp-eye',type:'button'});
+      eye2.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+      eye2.onclick=()=>{sp2=!sp2;ci.type=sp2?'text':'password';};
+      cw.appendChild(ci); cw.appendChild(eye2); form.appendChild(cw);
+    }
+
+    const btn=mk('button',{class:'auth-btn',text:tab==='login'?'Log In':'Sign Up',type:'button'});
+    btn.onclick=async e=>{
+      // ripple
+      const r=btn.getBoundingClientRect();
+      const rip=mk('div',{class:'auth-btn-ripple'});
+      const sz=Math.max(r.width,r.height);
+      rip.style.cssText=`width:${sz}px;height:${sz}px;left:${e.clientX-r.left-sz/2}px;top:${e.clientY-r.top-sz/2}px`;
+      btn.appendChild(rip); setTimeout(()=>rip.remove(),600);
+
+      clearMsg();
+      if(!f.user.trim()){showErr('Enter a username.');return;}
+      if(f.user.length<3){showErr('Username must be at least 3 characters.');return;}
+      if(!f.pass){showErr('Enter a password.');return;}
+      if(f.pass.length<6){showErr('Password must be at least 6 characters.');return;}
+      if(tab==='create'&&f.pass!==f.conf){showErr('Passwords do not match.');return;}
+      btn.disabled=true; btn.textContent=tab==='login'?'Logging in...':'Creating account...';
+      const proj=SUPABASE_URL.replace('https://','').replace('http://','');
+      const email=f.user.trim().toLowerCase().replace(/[^a-z0-9]/g,'')+'@'+proj;
+      try{
+        if(tab==='login'){
+          const {error}=await sb.auth.signInWithPassword({email,password:f.pass});
+          if(error)throw error;
+        } else {
+          const {data:ex}=await sb.from('profiles').select('id').eq('username',f.user.trim()).maybeSingle();
+          if(ex){showErr('Username taken.');btn.disabled=false;btn.textContent='Sign Up';return;}
+          const {data,error}=await sb.auth.signUp({email,password:f.pass});
+          if(error)throw error;
+          if(data?.user){
+            await sb.from('profiles').update({username:f.user.trim(),display_name:f.dname||f.user.trim(),avatar_color:colorFor(f.user.trim())}).eq('id',data.user.id);
+          }
+          showOk('Account created! Signing you in...');
+        }
+      } catch(err){showErr(err.message||'Something went wrong.');btn.disabled=false;btn.textContent=tab==='login'?'Log In':'Sign Up';}
+    };
+    form.appendChild(btn);
+    right.appendChild(form);
+    ui.focus();
+  }
+  build();
+  screen.appendChild(right);
+  return screen;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  APP SHELL
+// ═══════════════════════════════════════════════════════════════════════
+function renderApp(){
+  const app=mk('div',{class:'app'});
+  app.appendChild(renderSidebar());
+  const main=mk('div',{class:'main'});
+  main.appendChild(renderTopBar());
+  const content=mk('div',{class:'content-area'});
+  if(S.page==='feed'){
+    if(S.sub==='posts')content.appendChild(renderFeedView());
+    else content.appendChild(renderReelsView());
+    content.appendChild(renderRightPanel());
+  } else if(S.page==='explore'){
+    content.appendChild(renderExploreView());
+  } else if(S.page==='notifications'){
+    content.appendChild(renderNotifsView());
+  } else if(S.page==='profile'){
+    content.appendChild(renderProfileView(S.viewUser||S.profile?.id));
+  } else if(S.page==='messages'){
+    content.appendChild(renderDmView());
+  }
+  main.appendChild(content);
+  app.appendChild(main);
+  return app;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SIDEBAR
+// ═══════════════════════════════════════════════════════════════════════
+function renderSidebar(){
+  const sb2=mk('div',{class:'sidebar'+(S.sbCollapsed?' collapsed':'')});
+  const hd=mk('div',{class:'sb-header'});
+  hd.appendChild(mk('div',{class:'sb-logo-icon',text:'S'}));
+  if(!S.sbCollapsed)hd.appendChild(mk('div',{class:'sb-logo',text:'socialbox'}));
+  const cb=mk('button',{class:'sb-collapse-btn'});
+  cb.innerHTML=S.sbCollapsed?`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>`:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>`;
+  cb.onclick=()=>{S.sbCollapsed=!S.sbCollapsed;render();};
+  hd.appendChild(cb); sb2.appendChild(hd);
+
+  if(!S.sbCollapsed){
+    const sw=mk('div',{class:'sb-search'});
+    const si=mk('input',{class:'sb-search-inp',placeholder:'Search'});
+    si.oninput=e=>{S.searchQ=e.target.value;if(S.searchQ.length>1){S.page='explore';render();doSearch(S.searchQ);}else{S.searchRes={users:[],tags:[]};render();}};
+    si.onfocus=()=>{if(S.page!=='explore'){S.page='explore';render();}};
+    const sic=mkSvg('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>');
+    sic.setAttribute('class','sb-search-icon');
+    sw.appendChild(sic); sw.appendChild(si); sb2.appendChild(sw);
+  }
+
+  const cBtn=mk('button',{class:'sb-create-btn'});
+  cBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg><span class="label">Create</span>`;
+  cBtn.onclick=()=>{S.modal={type:'select'};render();};
+  sb2.appendChild(cBtn);
+
+  const nav=mk('div',{class:'sb-nav'});
+  const unread=S.notifs.filter(n=>!n.is_read).length;
+  [
+    {key:'feed',icon:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',label:'Home'},
+    {key:'explore',icon:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',label:'Explore'},
+    {key:'notifications',icon:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',label:'Notifications',badge:unread},
+    {key:'messages',icon:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',label:'Messages'},
+  ].forEach(item=>{
+    const btn=mk('button',{class:'sb-nav-item'+(S.page===item.key?' active':'')});
+    btn.appendChild(mkSvg(item.icon));
+    btn.appendChild(mk('span',{class:'label',text:item.label}));
+    if(item.badge>0){
+      const bw=mk('span',{class:'sb-nav-badge-wrap'});
+      bw.appendChild(mk('span',{class:'sb-nav-badge',text:String(item.badge>99?'99+':item.badge)}));
+      btn.appendChild(bw);
+    }
+    btn.onclick=()=>{S.page=item.key;if(item.key==='notifications')markAllRead();render();};
+    nav.appendChild(btn);
+  });
+  sb2.appendChild(nav);
+
+  const foot=mk('div',{class:'sb-footer'});
+  const uBtn=mk('div',{class:'sb-user',onclick:()=>{S.page='profile';S.viewUser=S.profile?.id;render();}});
+  uBtn.appendChild(buildAv(S.profile,36,'sb-user-av'));
+  if(!S.sbCollapsed){
+    const ui=mk('div',{class:'sb-user-info'});
+    ui.appendChild(mk('div',{class:'sb-user-name',text:S.profile?.display_name||S.profile?.username||''}));
+    ui.appendChild(mk('div',{class:'sb-user-handle',text:'@'+(S.profile?.username||'')}));
+    uBtn.appendChild(ui);
+    const soBtn=mk('button',{class:'dm-compose-btn'});
+    soBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>`;
+    soBtn.title='Sign out';
+    soBtn.onclick=async e=>{e.stopPropagation();await sb.auth.signOut();};
+    uBtn.appendChild(soBtn);
+  }
+  foot.appendChild(uBtn);
+  sb2.appendChild(foot);
+  return sb2;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TOP BAR
+// ═══════════════════════════════════════════════════════════════════════
+function renderTopBar(){
+  const bar=mk('div',{class:'top-bar'});
+  if(S.page==='feed'){
+    const tabs=mk('div',{class:'top-bar-tabs'});
+    [{key:'posts',label:'Posts',icon:'<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/>'},
+     {key:'reels',label:'Reels',icon:'<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>'}]
+    .forEach(t=>{
+      const tab=mk('div',{class:'top-bar-tab'+(S.sub===t.key?' active':'')});
+      tab.appendChild(mkSvg(t.icon));
+      tab.appendChild(mk('span',{text:t.label}));
+      tab.onclick=()=>{S.sub=t.key;render();};
+      tabs.appendChild(tab);
+    });
+    bar.appendChild(tabs);
+  } else {
+    const labels={explore:'Explore',notifications:'Activity',messages:'Messages',profile:'Profile'};
+    if(S.page==='profile'&&S.viewUser&&S.viewUser!==S.profile?.id){
+      const back=mk('button',{class:'top-bar-btn',onclick:()=>{S.page='feed';render();}});
+      back.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>`;
+      bar.appendChild(back);
+      const pname=S.profiles.find(p=>p.id===S.viewUser)?.username||'profile';
+      bar.appendChild(mk('div',{class:'top-bar-title',text:'@'+pname}));
+    } else {
+      bar.appendChild(mk('div',{class:'top-bar-title',text:labels[S.page]||''}));
+    }
+  }
+  const acts=mk('div',{class:'top-bar-actions'});
+  if(S.page==='feed'){
+    const nb=mk('button',{class:'top-bar-btn',title:'New post',onclick:()=>{S.modal={type:'select'};render();}});
+    nb.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>`;
+    acts.appendChild(nb);
+    const mb=mk('button',{class:'top-bar-btn',onclick:()=>{S.page='messages';render();}});
+    mb.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+    acts.appendChild(mb);
+  }
+  bar.appendChild(acts);
+  return bar;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  AVATAR BUILDER
+// ═══════════════════════════════════════════════════════════════════════
+function buildAv(prof,size=36,cls=''){
+  const w=mk('div',{class:cls});
+  w.style.cssText=`width:${size}px;height:${size}px;border-radius:50%;overflow:hidden;flex-shrink:0;position:relative`;
+  const inner=mk('div',{});
+  inner.style.cssText=`width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:${Math.floor(size*.35)}px;font-weight:600;color:#fff;font-family:'Press Start 2P',monospace;background:${prof?.avatar_color||colorFor(prof?.username||'?')}`;
+  inner.textContent=initials(prof?.display_name||prof?.username||'?');
+  w.appendChild(inner);
+  if(prof?.avatar_url){
+    const img=document.createElement('img');
+    img.src=prof.avatar_url;
+    img.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%';
+    img.onerror=()=>img.remove();
+    w.appendChild(img);
+  }
+  return w;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FEED VIEW
+// ═══════════════════════════════════════════════════════════════════════
+function renderFeedView(){
+  const view=mk('div',{style:'flex:1;display:flex;flex-direction:column;overflow:hidden'});
+  view.appendChild(renderStoriesBar());
+  view.appendChild(renderComposeBar());
+  const scroll=mk('div',{class:'feed-scroll'});
+  scroll.appendChild(renderFeedPosts());
+  view.appendChild(scroll);
+  return view;
+}
+
+function renderFeedPosts(){
+  const container=mk('div',{class:'feed-container'});
+  const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+  const posts=S.posts.filter(p=>p.user_id===S.profile?.id||myF.has(p.user_id))
+    .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+  if(posts.length===0){
+    const emp=mk('div',{class:'empty-state'});
+    emp.innerHTML=`<span class="empty-state-icon">📸</span><div class="empty-state-title">Your feed is empty</div><div class="empty-state-sub">Follow people to see their posts here</div>`;
+    const btn=mk('button',{class:'empty-state-btn',text:'Explore people',onclick:()=>{S.page='explore';render();}});
+    emp.appendChild(btn); container.appendChild(emp);
+  } else {
+    posts.forEach((p,i)=>{
+      const card=renderPost(p);
+      card.style.animationDelay=Math.min(i*.05,.3)+'s';
+      container.appendChild(card);
+    });
+  }
+  return container;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  STORIES BAR
+// ═══════════════════════════════════════════════════════════════════════
+function renderStoriesBar(){
+  const bar=mk('div',{class:'stories-bar'});
+  const scroll=mk('div',{class:'stories-scroll'});
+  const myStories=S.stories.filter(s=>s.user_id===S.profile?.id&&new Date(s.expires_at)>new Date());
+  const myBtn=mk('button',{class:'story-btn'});
+  const myRing=mk('div',{class:myStories.length>0?'story-ring':'story-ring no-story'});
+  const myInner=mk('div',{class:'story-inner'});
+  if(S.profile?.avatar_url){const img=document.createElement('img');img.src=S.profile.avatar_url;myInner.appendChild(img);}
+  else{myInner.style.background=S.profile?.avatar_color||colorFor(S.profile?.username||'');myInner.textContent=initials(S.profile?.display_name||S.profile?.username||'');}
+  if(myStories.length===0){myInner.textContent='+';myInner.style.fontSize='24px';myInner.style.color='var(--text3)';}
+  const rw=mk('div',{class:'story-ring-wrap'});
+  myRing.appendChild(myInner); rw.appendChild(myRing);
+  if(myStories.length>0)rw.appendChild(mk('div',{class:'story-add-badge',text:'+'}));
+  myBtn.appendChild(rw);
+  myBtn.appendChild(mk('div',{class:'story-name my',text:'Your story'}));
+  myBtn.onclick=()=>myStories.length>0?openStoryViewer(myStories,0):(S.modal={type:'story'},render());
+  scroll.appendChild(myBtn);
+
+  const now=new Date();
+  const active=S.stories.filter(s=>s.user_id!==S.profile?.id&&new Date(s.expires_at)>now);
+  const byUser={};
+  active.forEach(s=>{if(!byUser[s.user_id])byUser[s.user_id]=[];byUser[s.user_id].push(s);});
+  const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+  Object.entries(byUser).filter(([uid])=>myF.has(uid)).forEach(([uid,sts])=>{
+    const prof=S.profiles.find(p=>p.id===uid);if(!prof)return;
+    const btn=mk('button',{class:'story-btn'});
+    const ring=mk('div',{class:'story-ring'});
+    const inner=mk('div',{class:'story-inner'});
+    if(prof.avatar_url){const img=document.createElement('img');img.src=prof.avatar_url;inner.appendChild(img);}
+    else{inner.style.background=prof.avatar_color||colorFor(prof.username);inner.textContent=initials(prof.display_name||prof.username);}
+    const rw2=mk('div',{class:'story-ring-wrap'});
+    ring.appendChild(inner);rw2.appendChild(ring);
+    btn.appendChild(rw2);btn.appendChild(mk('div',{class:'story-name',text:prof.username}));
+    btn.onclick=()=>openStoryViewer(sts,0);
+    scroll.appendChild(btn);
+  });
+  bar.appendChild(scroll);
+  return bar;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  COMPOSE BAR
+// ═══════════════════════════════════════════════════════════════════════
+function renderComposeBar(){
+  const bar=mk('div',{class:'compose-post-bar'});
+  bar.appendChild(buildAv(S.profile,36,'compose-av'));
+  const right=mk('div',{class:'compose-right'});
+  let content='',file=null,mtype=null;
+  const ta=mk('textarea',{class:'compose-ta',placeholder:"What's on your mind?"});
+  ta.rows=2;
+  const counter=mk('span',{class:'compose-counter',text:String(MAX_POST)});
+  const submitBtn=mk('button',{class:'compose-submit-btn',text:'Post'});
+  submitBtn.disabled=true;
+  ta.oninput=()=>{
+    content=ta.value;
+    const left=MAX_POST-content.length;
+    counter.textContent=left;
+    counter.className='compose-counter'+(left<50?' warn':'')+(left<0?' over':'');
+    submitBtn.disabled=(content.trim().length===0&&!file)||left<0;
+  };
+  right.appendChild(ta);
+  const prevContainer=mk('div',{});
+  right.appendChild(prevContainer);
+  const footer=mk('div',{class:'compose-footer'});
+
+  // Photo
+  const photoBtn=mk('button',{class:'compose-media-btn',title:'Photo/Video'});
+  photoBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+  const fileInp=mk('input',{type:'file',accept:'image/*,video/*'});
+  fileInp.style.display='none';
+  fileInp.onchange=()=>{
+    file=fileInp.files[0];if(!file)return;
+    mtype=file.type.startsWith('video/')?'video':'image';
+    const url=URL.createObjectURL(file);
+    prevContainer.innerHTML='';
+    const pw=mk('div',{class:'compose-media-preview'});
+    if(mtype==='video'){const v=document.createElement('video');v.src=url;v.controls=true;pw.appendChild(v);}
+    else{const img=document.createElement('img');img.src=url;pw.appendChild(img);}
+    const rm=mk('button',{class:'compose-media-remove',text:'×'});
+    rm.onclick=()=>{file=null;mtype=null;prevContainer.innerHTML='';submitBtn.disabled=content.trim().length===0;};
+    pw.appendChild(rm);prevContainer.appendChild(pw);
+    submitBtn.disabled=false;
+  };
+  photoBtn.onclick=()=>fileInp.click();
+  footer.appendChild(photoBtn);footer.appendChild(fileInp);
+
+  // Emoji
+  const emojiBtn=mk('button',{class:'compose-media-btn',title:'Emoji'});
+  emojiBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
+  emojiBtn.onclick=e=>{
+    e.stopPropagation();
+    const ex=qs('.emoji-picker');if(ex){ex.remove();return;}
+    const picker=buildEmojiPicker(em=>{ta.value+=em;content=ta.value;submitBtn.disabled=false;picker.remove();});
+    footer.appendChild(picker);
+    document.addEventListener('click',()=>picker.remove(),{once:true});
+  };
+  footer.appendChild(emojiBtn);
+  footer.appendChild(counter);
+  submitBtn.onclick=async()=>{
+    if(!content.trim()&&!file)return;
+    submitBtn.disabled=true;submitBtn.textContent='Posting...';
+    try{
+      let mediaUrl=null;
+      if(file)mediaUrl=await uploadMedia(file,S.user.id);
+      await sb.from('posts').insert({user_id:S.user.id,content:content.trim()||null,media_url:mediaUrl,media_type:mtype});
+      toast('Post shared! ✨','success');
+      await loadPosts();render();
+    }catch(err){toast('Failed: '+err.message,'error');submitBtn.disabled=false;submitBtn.textContent='Post';}
+  };
+  footer.appendChild(submitBtn);
+  right.appendChild(footer);
+  bar.appendChild(right);
+  return bar;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  POST CARD
+// ═══════════════════════════════════════════════════════════════════════
+function renderPost(post){
+  const prof=S.profiles.find(p=>p.id===post.user_id)||{username:'unknown',avatar_color:'#888',display_name:'Unknown'};
+  const isLiked=S.postLikes.has(post.id);
+  const isSaved=S.saved.has(post.id);
+  const card=mk('div',{class:'post-card'});
+
+  // Header
+  const hd=mk('div',{class:'post-header'});
+  const avWrap=mk('div',{class:'post-av-wrap'});
+  const av=buildAv(prof,36,'post-av');
+  av.style.cursor='pointer'; av.onclick=()=>goProfile(prof.id);
+  avWrap.appendChild(av);
+  hd.appendChild(avWrap);
+  const meta=mk('div',{class:'post-meta'});
+  const ar=mk('div',{class:'post-author-row'});
+  const auth=mk('span',{class:'post-author',text:prof.display_name||prof.username});
+  auth.onclick=()=>goProfile(prof.id);
+  ar.appendChild(auth);
+  if(prof.username)ar.appendChild(mk('span',{class:'post-handle',text:'@'+prof.username}));
+  meta.appendChild(ar);
+  hd.appendChild(meta);
+  hd.appendChild(mk('span',{class:'post-time',text:timeAgo(post.created_at)}));
+  const moreBtn=mk('button',{class:'post-more-btn'});
+  moreBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg>`;
+  moreBtn.onclick=e=>openCtxMenu(e,post);
+  hd.appendChild(moreBtn);
+  card.appendChild(hd);
+
+  // Media
+  if(post.media_url){
+    const mw=mk('div',{class:'post-media-wrap'});
+    let dblTimer=null;
+    if(post.media_type==='video'){
+      const vid=document.createElement('video');
+      vid.src=post.media_url;vid.className='post-video';vid.controls=true;vid.playsInline=true;vid.preload='metadata';
+      mw.appendChild(vid);
+    } else {
+      const img=document.createElement('img');
+      img.src=post.media_url;img.className='post-img';img.loading='lazy';img.alt='';
+      img.addEventListener('click',()=>{
+        if(dblTimer){clearTimeout(dblTimer);dblTimer=null;showHeart(mw);if(!S.postLikes.has(post.id))doLikePost(post,card);}
+        else dblTimer=setTimeout(()=>{dblTimer=null;S.lightbox={url:post.media_url,type:'image'};render();},280);
+      });
+      mw.appendChild(img);
+    }
+    card.appendChild(mw);
+  }
+
+  // Actions
+  const acts=mk('div',{class:'post-actions'});
+  const likeBtn=mk('button',{class:'post-act-btn'+(isLiked?' liked':'')});
+  likeBtn.innerHTML=isLiked
+    ?`<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
+    :`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  likeBtn.onclick=()=>doLikePost(post,card);
+  acts.appendChild(likeBtn);
+
+  const cmtBtn=mk('button',{class:'post-act-btn'});
+  cmtBtn.innerHTML=`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+  cmtBtn.onclick=()=>openComments(post.id);
+  acts.appendChild(cmtBtn);
+
+  const shareBtn=mk('button',{class:'post-act-btn'});
+  shareBtn.innerHTML=`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
+  shareBtn.onclick=()=>sharePost(post);
+  acts.appendChild(shareBtn);
+
+  const saveBtn=mk('button',{class:'post-act-btn post-act-save'+(isSaved?' saved':'')});
+  saveBtn.innerHTML=isSaved
+    ?`<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`
+    :`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
+  saveBtn.onclick=()=>doSave(post,saveBtn);
+  acts.appendChild(saveBtn);
+  card.appendChild(acts);
+
+  // Likes
+  const lc=post.like_count||0;
+  if(lc>0){
+    const le=mk('div',{class:'post-likes',text:fmtCount(lc)+(lc===1?' like':' likes')});
+    card.appendChild(le);
+  }
+
+  // Caption
+  if(post.content){
+    const cap=mk('div',{class:'post-caption'});
+    const ca=mk('span',{class:'post-caption-author',text:prof.username||prof.display_name});
+    ca.onclick=()=>goProfile(prof.id); cap.appendChild(ca);
+    const MAX=120;
+    if(post.content.length>MAX){
+      const st=document.createElement('span');
+      st.innerHTML=' '+parseContent(post.content.slice(0,MAX));
+      cap.appendChild(st);
+      const ml=mk('a',{class:'post-caption-more',text:'...more'});
+      let ex=false;
+      ml.onclick=()=>{if(!ex){st.innerHTML=' '+parseContent(post.content);ml.style.display='none';ex=true;}};
+      cap.appendChild(ml);
+    } else {
+      const st=document.createElement('span');
+      st.innerHTML=' '+parseContent(post.content);
+      cap.appendChild(st);
+    }
+    card.appendChild(cap);
+  }
+
+  // Comment count
+  const cc=post.comment_count||0;
+  if(cc>0){
+    const vc=mk('div',{class:'post-view-comments',text:`View all ${fmtCount(cc)} comment${cc===1?'':'s'}`});
+    vc.onclick=()=>openComments(post.id);
+    card.appendChild(vc);
+  }
+
+  // Add comment row
+  const acr=mk('div',{class:'post-add-comment'});
+  acr.appendChild(buildAv(S.profile,26,'post-comment-av'));
+  const ci=mk('input',{class:'post-comment-inp',placeholder:'Add a comment...',type:'text'});
+  const cs=mk('button',{class:'post-comment-send',text:'Post'});
+  cs.disabled=true;
+  ci.oninput=()=>{const v=ci.value.trim().length>0;cs.className='post-comment-send'+(v?' visible':'');cs.disabled=!v;};
+  ci.onkeydown=e=>{if(e.key==='Enter')cs.click();};
+  cs.onclick=async()=>{
+    const txt=ci.value.trim();if(!txt)return;
+    cs.disabled=true;
+    await submitComment(post.id,null,txt);
+    ci.value='';cs.className='post-comment-send';
+    post.comment_count=(post.comment_count||0)+1;
+    const vc2=card.querySelector('.post-view-comments');
+    if(vc2)vc2.textContent=`View all ${fmtCount(post.comment_count)} comments`;
+  };
+  acr.appendChild(ci);acr.appendChild(cs);
+  card.appendChild(acr);
+  return card;
+}
+
+function showHeart(container){
+  const a=mk('div',{class:'heart-anim'});
+  a.appendChild(mk('span',{class:'heart-anim-icon',text:'❤️'}));
+  container.appendChild(a);setTimeout(()=>a.remove(),900);
+}
+
+async function doLikePost(post,cardEl){
+  const liked=S.postLikes.has(post.id);
+  if(liked){
+    await sb.from('likes').delete().eq('user_id',S.user.id).eq('post_id',post.id);
+    S.postLikes.delete(post.id);post.like_count=Math.max(0,(post.like_count||1)-1);
+  } else {
+    await sb.from('likes').insert({user_id:S.user.id,post_id:post.id});
+    S.postLikes.add(post.id);post.like_count=(post.like_count||0)+1;
+    if(post.user_id!==S.user.id)await sb.from('notifications').insert({user_id:post.user_id,from_id:S.user.id,type:'like',post_id:post.id});
+  }
+  if(!cardEl)return;
+  const lb=cardEl.querySelector('.post-act-btn:first-child');
+  const le=cardEl.querySelector('.post-likes');
+  const nowLiked=S.postLikes.has(post.id);
+  if(lb){
+    lb.className='post-act-btn'+(nowLiked?' liked animate':'');
+    lb.innerHTML=nowLiked
+      ?`<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
+      :`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    setTimeout(()=>lb.classList.remove('animate'),400);
+  }
+  if(le){const c=post.like_count;if(c>0)le.textContent=fmtCount(c)+(c===1?' like':' likes');else le.remove();}
+}
+
+async function doSave(post,btn){
+  const saved=S.saved.has(post.id);
+  if(saved){
+    S.saved.delete(post.id);
+    if(btn){btn.className='post-act-btn post-act-save';btn.innerHTML=`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;}
+    toast('Removed from saved');
+  } else {
+    S.saved.add(post.id);
+    if(btn){btn.className='post-act-btn post-act-save saved';btn.innerHTML=`<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;}
+    toast('Saved ✅','success');
+  }
+}
+
+async function sharePost(post){
+  const url=window.location.origin+'?p='+post.id;
+  if(navigator.clipboard)await navigator.clipboard.writeText(url);
+  toast('Link copied! 🔗','success');
+}
+
+function openCtxMenu(e,post){
+  e.stopPropagation();
+  S.ctxMenu={type:'post',post,x:e.clientX,y:e.clientY};
+  render();
+}
+
+function renderCtxMenu(){
+  const m=S.ctxMenu;
+  const el=mk('div',{class:'context-menu'});
+  el.style.left=Math.min(m.x,window.innerWidth-200)+'px';
+  el.style.top=Math.min(m.y,window.innerHeight-260)+'px';
+  const close=()=>{S.ctxMenu=null;el.remove();};
+  document.addEventListener('click',close,{once:true});
+  if(m.type==='post'){
+    const post=m.post;
+    [{ico:'🔗',txt:'Copy link',fn:()=>sharePost(post)},
+     {ico:'🔖',txt:S.saved.has(post.id)?'Unsave':'Save',fn:()=>doSave(post,null)},
+     ...(post.user_id===S.user.id?[{ico:'🗑️',txt:'Delete',danger:true,fn:async()=>{await deletePost(post.id);close();}}]:[{ico:'🚩',txt:'Report',fn:()=>toast('Reported. Thanks.')}])
+    ].forEach(item=>{
+      const btn=mk('button',{class:'context-menu-item'+(item.danger?' danger':'')});
+      btn.innerHTML=`<span>${item.ico}</span>${item.txt}`;
+      btn.onclick=()=>{item.fn();close();};
+      el.appendChild(btn);
+    });
+  }
+  return el;
+}
+
+async function deletePost(id){
+  await sb.from('posts').delete().eq('id',id);
+  S.posts=S.posts.filter(p=>p.id!==id);render();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  COMMENTS
+// ═══════════════════════════════════════════════════════════════════════
+function openComments(postId,reelId=null){
+  S.commentsOpen={postId,reelId};
+  const key=postId||reelId;
+  if(!S.comments[key])loadComments(postId,reelId).then(()=>render());
+  else render();
+}
+
+async function loadComments(postId,reelId){
+  const key=postId||reelId;
+  let q=sb.from('comments').select('*').order('created_at');
+  if(postId)q=q.eq('post_id',postId);
+  else if(reelId)q=q.eq('reel_id',reelId);
+  const {data}=await q;
+  S.comments[key]=data||[];
+}
+
+async function submitComment(postId,reelId,text){
+  const row=postId?{post_id:postId,user_id:S.user.id,content:text}:{reel_id:reelId,user_id:S.user.id,content:text};
+  const {data}=await sb.from('comments').insert(row).select().single();
+  const key=postId||reelId;
+  if(!S.comments[key])S.comments[key]=[];
+  if(data)S.comments[key].push(data);
+  const tp=S.posts.find(p=>p.id===postId);if(tp)tp.comment_count=(tp.comment_count||0)+1;
+  const tr=S.reels.find(r=>r.id===reelId);if(tr)tr.comment_count=(tr.comment_count||0)+1;
+  const oid=S.posts.find(p=>p.id===postId)?.user_id||S.reels.find(r=>r.id===reelId)?.user_id;
+  if(oid&&oid!==S.user.id)await sb.from('notifications').insert({user_id:oid,from_id:S.user.id,type:'comment',post_id:postId,reel_id:reelId});
+}
+
+function renderCommentsSheet(){
+  const {postId,reelId}=S.commentsOpen;
+  const key=postId||reelId;
+  const comments=S.comments[key]||[];
+  let cmtText='';
+  const overlay=mk('div',{class:'comments-sheet-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay){S.commentsOpen=null;render();}};
+  const sheet=mk('div',{class:'comments-sheet'});
+  sheet.onclick=e=>e.stopPropagation();
+  sheet.appendChild(mk('div',{class:'comments-sheet-handle'}));
+  const hd=mk('div',{class:'comments-sheet-header'});
+  hd.appendChild(mk('span',{class:'comments-sheet-title',text:'Comments'}));
+  const xBtn=mk('button',{class:'comments-sheet-close'});
+  xBtn.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  xBtn.onclick=()=>{S.commentsOpen=null;render();};
+  hd.appendChild(xBtn);sheet.appendChild(hd);
+  const list=mk('div',{class:'comments-list'});
+  if(comments.length===0){
+    const emp=mk('div',{class:'empty-state',style:'padding:32px 16px'});
+    emp.innerHTML=`<span class="empty-state-icon" style="font-size:36px">💬</span><div class="empty-state-title" style="font-size:15px">No comments yet</div><div class="empty-state-sub">Be the first to comment!</div>`;
+    list.appendChild(emp);
+  } else {
+    comments.forEach(c=>{
+      const prof=S.profiles.find(p=>p.id===c.user_id)||{username:'unknown',avatar_color:'#888'};
+      const item=mk('div',{class:'comment-item'});
+      const av=buildAv(prof,32,'comment-av');
+      av.style.cursor='pointer';av.onclick=()=>{S.commentsOpen=null;goProfile(prof.id);};
+      item.appendChild(av);
+      const body=mk('div',{class:'comment-body'});
+      const txt=mk('div',{class:'comment-text'});
+      const au=mk('span',{class:'comment-author',text:prof.username||prof.display_name});
+      au.onclick=()=>{S.commentsOpen=null;goProfile(prof.id);};
+      txt.appendChild(au);
+      const ct=document.createElement('span');
+      ct.innerHTML=' '+parseContent(c.content);
+      txt.appendChild(ct);body.appendChild(txt);
+      const meta=mk('div',{class:'comment-meta'});
+      meta.appendChild(mk('span',{class:'comment-time',text:timeAgo(c.created_at)}));
+      if(c.user_id===S.user.id){
+        const del=mk('button',{class:'comment-delete-btn',text:'Delete'});
+        del.onclick=async()=>{await sb.from('comments').delete().eq('id',c.id);S.comments[key]=S.comments[key].filter(x=>x.id!==c.id);render();};
+        meta.appendChild(del);
+      }
+      body.appendChild(meta);item.appendChild(body);list.appendChild(item);
+    });
+  }
+  sheet.appendChild(list);
+  const ia=mk('div',{class:'comment-input-area'});
+  ia.appendChild(buildAv(S.profile,30,'comment-input-av'));
+  const iw=mk('div',{class:'comment-input-wrap'});
+  const ta=mk('textarea',{class:'comment-input-ta',placeholder:'Add a comment...'});
+  ta.rows=1;
+  ta.oninput=e=>{cmtText=e.target.value;ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,100)+'px';sendBtn.disabled=!ta.value.trim();};
+  ta.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}};
+  const ar=mk('div',{class:'comment-input-actions'});
+  const eBtn=mk('button',{class:'comment-emoji-btn',text:'😊'});
+  eBtn.onclick=e=>{
+    e.stopPropagation();
+    const ex=qs('.emoji-picker');if(ex){ex.remove();return;}
+    const picker=buildEmojiPicker(em=>{ta.value+=em;cmtText=ta.value;picker.remove();});
+    iw.appendChild(picker);document.addEventListener('click',()=>picker.remove(),{once:true});
+  };
+  ar.appendChild(eBtn);
+  const sendBtn=mk('button',{class:'comment-send-btn',text:'Post'});
+  sendBtn.disabled=true;
+  sendBtn.onclick=async()=>{
+    const txt=ta.value.trim();if(!txt)return;
+    sendBtn.disabled=true;
+    await submitComment(postId,reelId,txt);
+    ta.value='';ta.style.height='auto';
+    list.innerHTML='';
+    (S.comments[key]||[]).forEach(c=>{
+      const prof=S.profiles.find(p=>p.id===c.user_id)||{username:'unknown',avatar_color:'#888'};
+      const item=mk('div',{class:'comment-item'});
+      const av2=buildAv(prof,32,'comment-av');
+      const body2=mk('div',{class:'comment-body'});
+      const txt2=mk('div',{class:'comment-text'});
+      const au2=mk('span',{class:'comment-author',text:prof.username});
+      const ct2=document.createElement('span');ct2.innerHTML=' '+parseContent(c.content);
+      txt2.appendChild(au2);txt2.appendChild(ct2);body2.appendChild(txt2);
+      item.appendChild(av2);item.appendChild(body2);list.appendChild(item);
+    });
+    list.scrollTop=list.scrollHeight;
+  };
+  ar.appendChild(sendBtn);
+  iw.appendChild(ta);iw.appendChild(ar);ia.appendChild(iw);sheet.appendChild(ia);
+  overlay.appendChild(sheet);
+  return overlay;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  EMOJI PICKER
+// ═══════════════════════════════════════════════════════════════════════
+function buildEmojiPicker(onSel){
+  const p=mk('div',{class:'emoji-picker'});
+  const emojis=['😀','😂','🥰','😍','😎','🤔','😮','😢','😡','👍','👏','🔥','💯','🎉','✨','❤️','💙','💚','💛','🌟','🎊','🙌','💪','🤝','🫶','😊','🥺','😴','🤓','😏','🙄','😤','🤩','🥳','😇','🤗','😜','🤪','😋','🤤','😭','😱','🫡','🤯','🥴','🫠'];
+  const g=mk('div',{class:'emoji-grid'});
+  emojis.forEach(em=>{
+    const b=mk('button',{class:'emoji-btn',text:em});
+    b.onclick=e=>{e.stopPropagation();onSel(em);};
+    g.appendChild(b);
+  });
+  p.appendChild(g);return p;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  REELS
+// ═══════════════════════════════════════════════════════════════════════
+function renderReelsView(){
+  const view=mk('div',{class:'reels-view'});
+  const scroll=mk('div',{class:'reels-scroll'});
+  if(S.reels.length===0){
+    const emp=mk('div',{class:'empty-state',style:'height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center'});
+    emp.innerHTML=`<span class="empty-state-icon">🎬</span><div class="empty-state-title">No reels yet</div><div class="empty-state-sub">Post your first video reel!</div>`;
+    const ab=mk('button',{class:'empty-state-btn',text:'+ Post Reel',onclick:()=>{S.modal={type:'reel'};render();}});
+    emp.appendChild(ab);scroll.appendChild(emp);view.appendChild(scroll);return view;
+  }
+  [...S.reels].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).forEach(reel=>{
+    const item=mk('div',{class:'reel-item'});
+    item.dataset.rid=reel.id;
+    if(reel.fb_embed){
+      const iframe=document.createElement('iframe');
+      iframe.src=getFbEmbed(reel.fb_embed);
+      iframe.className='reel-fb-iframe';iframe.allowFullscreen=true;
+      iframe.setAttribute('allow','autoplay;clipboard-write;encrypted-media;picture-in-picture;web-share');
+      item.appendChild(iframe);
+    } else if(reel.video_url){
+      const vid=document.createElement('video');
+      vid.src=reel.video_url;vid.className='reel-video';
+      vid.loop=true;vid.playsInline=true;vid.muted=false;vid.preload='metadata';
+      item.appendChild(vid);
+      const obs=new IntersectionObserver(entries=>{
+        entries.forEach(en=>{
+          if(en.isIntersecting){vid.play().catch(()=>{vid.muted=true;vid.play().catch(()=>{});});}
+          else vid.pause();
+        });
+      },{threshold:.6});
+      obs.observe(item);iObservers.push(obs);
+    }
+    item.appendChild(mk('div',{class:'reel-gradient-top'}));
+    item.appendChild(mk('div',{class:'reel-gradient-bottom'}));
+    const prof=S.profiles.find(p=>p.id===reel.user_id)||{username:'unknown',avatar_color:'#888'};
+    const bottom=mk('div',{class:'reel-bottom'});
+    const ur=mk('div',{class:'reel-user-row'});
+    const rav=buildAv(prof,36,'reel-av');rav.style.cursor='pointer';rav.onclick=()=>goProfile(prof.id);
+    ur.appendChild(rav);
+    const uname=mk('span',{class:'reel-uname',text:'@'+(prof.username||prof.display_name)});
+    uname.onclick=()=>goProfile(prof.id);ur.appendChild(uname);
+    const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+    if(reel.user_id!==S.profile?.id){
+      const isF=myF.has(reel.user_id);
+      const fb=mk('button',{class:'reel-follow-inline'+(isF?' following':''),text:isF?'Following':'Follow'});
+      fb.onclick=async()=>{await handleFollow(reel.user_id);render();};
+      ur.appendChild(fb);
+    }
+    bottom.appendChild(ur);
+    if(reel.caption){const cap=mk('div',{class:'reel-caption'});cap.innerHTML=parseContent(reel.caption);bottom.appendChild(cap);}
+    const audio=mk('div',{class:'reel-audio'});
+    audio.innerHTML=`<div class="reel-audio-disc"></div><span>Original audio</span>`;
+    bottom.appendChild(audio);item.appendChild(bottom);
+
+    const side=mk('div',{class:'reel-side-actions'});
+    const isLiked=S.reelLikes.has(reel.id);
+    side.appendChild(buildAv(prof,44,'reel-act-av-btn'));
+
+    const la=mk('div',{class:'reel-act'});
+    const lb=mk('button',{class:'reel-act-btn'+(isLiked?' liked':'')});
+    lb.innerHTML=`<svg viewBox="0 0 24 24" fill="${isLiked?'currentColor':'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    lb.onclick=async()=>doLikeReel(reel,item);
+    la.appendChild(lb);la.appendChild(mk('span',{class:'reel-act-label',text:fmtCount(reel.like_count||0)}));
+    side.appendChild(la);
+
+    const ca=mk('div',{class:'reel-act'});
+    const cb2=mk('button',{class:'reel-act-btn'});
+    cb2.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+    cb2.onclick=()=>openComments(null,reel.id);
+    ca.appendChild(cb2);ca.appendChild(mk('span',{class:'reel-act-label',text:fmtCount(reel.comment_count||0)}));
+    side.appendChild(ca);
+
+    const sa=mk('div',{class:'reel-act'});
+    const sb3=mk('button',{class:'reel-act-btn'});
+    sb3.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
+    sb3.onclick=()=>sharePost(reel);
+    sa.appendChild(sb3);sa.appendChild(mk('span',{class:'reel-act-label',text:'Share'}));
+    side.appendChild(sa);
+
+    if(reel.user_id===S.profile?.id){
+      const da=mk('div',{class:'reel-act'});
+      const db=mk('button',{class:'reel-act-btn'});
+      db.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>`;
+      db.onclick=async()=>{await sb.from('reels').delete().eq('id',reel.id);S.reels=S.reels.filter(r=>r.id!==reel.id);render();};
+      da.appendChild(db);da.appendChild(mk('span',{class:'reel-act-label',text:'Delete'}));
+      side.appendChild(da);
+    }
+    item.appendChild(side);
+    scroll.appendChild(item);
+  });
+  const fab=mk('button',{style:'position:fixed;bottom:24px;right:24px;width:52px;height:52px;border-radius:50%;background:var(--accent);border:none;color:#fff;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:50;box-shadow:0 4px 16px rgba(99,102,241,.4);transition:all .18s'});
+  fab.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>`;
+  fab.onmouseover=()=>fab.style.transform='scale(1.1)';fab.onmouseout=()=>fab.style.transform='scale(1)';
+  fab.onclick=()=>{S.modal={type:'reel'};render();};
+  scroll.appendChild(fab);
+  view.appendChild(scroll);return view;
+}
+
+async function doLikeReel(reel,itemEl){
+  const liked=S.reelLikes.has(reel.id);
+  if(liked){
+    await sb.from('likes').delete().eq('user_id',S.user.id).eq('reel_id',reel.id);
+    S.reelLikes.delete(reel.id);reel.like_count=Math.max(0,(reel.like_count||1)-1);
+  } else {
+    await sb.from('likes').insert({user_id:S.user.id,reel_id:reel.id});
+    S.reelLikes.add(reel.id);reel.like_count=(reel.like_count||0)+1;
+    if(reel.user_id!==S.user.id)await sb.from('notifications').insert({user_id:reel.user_id,from_id:S.user.id,type:'reel',reel_id:reel.id});
+    const anim=mk('div',{class:'reel-like-anim'});
+    anim.appendChild(mk('span',{class:'reel-like-heart',text:'❤️'}));
+    itemEl.appendChild(anim);setTimeout(()=>anim.remove(),1000);
+  }
+  const lb=itemEl.querySelector('.reel-act-btn');
+  const ll=lb?.parentElement?.querySelector('.reel-act-label');
+  const nowLiked=S.reelLikes.has(reel.id);
+  if(lb){lb.className='reel-act-btn'+(nowLiked?' liked':'');lb.innerHTML=`<svg viewBox="0 0 24 24" fill="${nowLiked?'currentColor':'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;}
+  if(ll)ll.textContent=fmtCount(reel.like_count||0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  STORY VIEWER
+// ═══════════════════════════════════════════════════════════════════════
+function openStoryViewer(stories,idx){
+  if(storyTimer)clearTimeout(storyTimer);
+  S.storyViewer={stories,idx};render();startStoryTimer();
+}
+function startStoryTimer(){
+  if(storyTimer)clearTimeout(storyTimer);
+  storyTimer=setTimeout(()=>advStory(1),STORY_DURATION);
+}
+function advStory(dir){
+  if(!S.storyViewer)return;
+  const {stories,idx}=S.storyViewer;
+  const ni=idx+dir;
+  if(ni>=stories.length||ni<0){closeStory();return;}
+  S.storyViewer={stories,idx:ni};render();startStoryTimer();
+}
+function closeStory(){
+  if(storyTimer)clearTimeout(storyTimer);
+  S.storyViewer=null;render();
+}
+
+function renderStoryViewer(){
+  const {stories,idx}=S.storyViewer;
+  const story=stories[idx];
+  const prof=S.profiles.find(p=>p.id===story.user_id)||{username:'unknown',avatar_color:'#888'};
+  const overlay=mk('div',{class:'story-viewer-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay)closeStory();};
+  const viewer=mk('div',{class:'story-viewer'});
+  const mw=mk('div',{class:'sv-media-wrap'});
+  if(story.media_type==='video'){
+    const vid=document.createElement('video');
+    vid.src=story.media_url;vid.className='sv-video';vid.autoplay=true;vid.playsInline=true;vid.muted=S.storyMuted;
+    vid.onended=()=>advStory(1);mw.appendChild(vid);
+  } else {
+    const img=document.createElement('img');img.src=story.media_url;img.className='sv-img';mw.appendChild(img);
+  }
+  viewer.appendChild(mw);
+  viewer.appendChild(mk('div',{class:'sv-gradient-top'}));
+  viewer.appendChild(mk('div',{class:'sv-gradient-bottom'}));
+  const pbs=mk('div',{class:'sv-progress-bars'});
+  stories.forEach((_,i)=>{
+    const bar=mk('div',{class:'sv-progress-bar'});
+    const fill=mk('div',{class:'sv-progress-fill'+(i===idx?' animating':i<idx?' done':'')});
+    if(i===idx)fill.style.setProperty('--duration',(STORY_DURATION/1000)+'s');
+    bar.appendChild(fill);pbs.appendChild(bar);
+  });
+  viewer.appendChild(pbs);
+  const hd=mk('div',{class:'sv-header'});
+  hd.appendChild(buildAv(prof,32,'sv-av'));
+  const sm=mk('div',{class:'sv-meta'});
+  sm.appendChild(mk('div',{class:'sv-uname',text:prof.username||prof.display_name}));
+  sm.appendChild(mk('div',{class:'sv-time',text:timeAgo(story.created_at)}));
+  hd.appendChild(sm);
+  const sat=mk('div',{class:'sv-actions-top'});
+  const muteBtn=mk('button',{class:'sv-mute-btn'});
+  muteBtn.innerHTML=S.storyMuted?`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`:`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`;
+  muteBtn.onclick=e=>{e.stopPropagation();S.storyMuted=!S.storyMuted;render();};
+  const closeBtn=mk('button',{class:'sv-close-btn'});
+  closeBtn.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  closeBtn.onclick=closeStory;
+  sat.appendChild(muteBtn);sat.appendChild(closeBtn);hd.appendChild(sat);viewer.appendChild(hd);
+  const tl=mk('div',{class:'sv-tap-left'});tl.onclick=()=>advStory(-1);
+  const tr=mk('div',{class:'sv-tap-right'});tr.onclick=()=>advStory(1);
+  viewer.appendChild(tl);viewer.appendChild(tr);
+  const foot=mk('div',{class:'sv-footer'});
+  const ri=mk('input',{class:'sv-reply-inp',placeholder:`Reply to ${prof.username||'story'}...`,type:'text'});
+  ri.onclick=e=>e.stopPropagation();
+  foot.appendChild(ri);
+  const sl=mk('button',{class:'sv-like-btn'});
+  sl.innerHTML=`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  foot.appendChild(sl);viewer.appendChild(foot);
+  if(idx>0){const np=mk('button',{class:'sv-nav-prev'});np.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>`;np.onclick=e=>{e.stopPropagation();advStory(-1);};viewer.appendChild(np);}
+  if(idx<stories.length-1){const nn=mk('button',{class:'sv-nav-next'});nn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>`;nn.onclick=e=>{e.stopPropagation();advStory(1);};viewer.appendChild(nn);}
+  overlay.appendChild(viewer);return overlay;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  LIGHTBOX
+// ═══════════════════════════════════════════════════════════════════════
+function renderLightbox(){
+  const {url,type}=S.lightbox;
+  const overlay=mk('div',{class:'lightbox-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay){S.lightbox=null;render();}};
+  if(type==='video'){
+    const vid=document.createElement('video');vid.src=url;vid.className='lightbox-media';vid.controls=true;vid.autoplay=true;overlay.appendChild(vid);
+  } else {
+    const img=document.createElement('img');img.src=url;img.className='lightbox-media';overlay.appendChild(img);
+  }
+  const cb=mk('button',{class:'lightbox-close',text:'×',onclick:()=>{S.lightbox=null;render();}});
+  overlay.appendChild(cb);return overlay;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  RIGHT PANEL
+// ═══════════════════════════════════════════════════════════════════════
+function renderRightPanel(){
+  const panel=mk('div',{class:'right-panel'});
+  const scroll=mk('div',{class:'rp-scroll'});
+  if(S.profile){
+    const me=mk('div',{class:'rp-user-row',style:'margin-bottom:16px;cursor:pointer'});
+    me.onclick=()=>{S.page='profile';S.viewUser=S.profile.id;render();};
+    me.appendChild(buildAv(S.profile,38,'rp-av'));
+    const mi=mk('div',{class:'rp-info'});
+    mi.appendChild(mk('div',{class:'rp-name',text:S.profile.display_name||S.profile.username}));
+    mi.appendChild(mk('div',{class:'rp-sub',text:'@'+S.profile.username}));
+    me.appendChild(mi);
+    scroll.appendChild(me);
+    scroll.appendChild(mk('div',{class:'rp-divider'}));
+  }
+  const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+  const sugg=S.profiles.filter(p=>p.id!==S.profile?.id&&!myF.has(p.id)).slice(0,6);
+  if(sugg.length>0){
+    const sec=mk('div',{class:'rp-section'});
+    sec.appendChild(mk('div',{class:'rp-title',text:'Suggested for you'}));
+    sugg.forEach(p=>{
+      const row=mk('div',{class:'rp-user-row'});
+      const av=buildAv(p,38,'rp-av');av.style.cursor='pointer';av.onclick=()=>goProfile(p.id);
+      const info=mk('div',{class:'rp-info'});
+      const nm=mk('div',{class:'rp-name',text:p.display_name||p.username});nm.onclick=()=>goProfile(p.id);
+      const foll=S.follows.filter(f=>f.following_id===p.id).length;
+      info.appendChild(nm);info.appendChild(mk('div',{class:'rp-sub',text:foll>0?fmtCount(foll)+' followers':'New to socialbox'}));
+      const fb=mk('button',{class:'rp-follow-btn',text:'Follow'});
+      fb.onclick=async()=>{await handleFollow(p.id);fb.textContent='Following';fb.className='rp-follow-btn following';};
+      row.appendChild(av);row.appendChild(info);row.appendChild(fb);sec.appendChild(row);
+    });
+    scroll.appendChild(sec);
+  }
+  const sec2=mk('div',{class:'rp-section'});
+  sec2.appendChild(mk('div',{class:'rp-title',text:'Trending'}));
+  ['#photography','#reels','#art','#fashion','#travel','#food'].forEach(tag=>{
+    const row=mk('div',{class:'rp-trending-tag'});
+    row.appendChild(mk('span',{class:'rp-tag-name',text:tag}));
+    row.appendChild(mk('span',{class:'rp-tag-count',text:Math.floor(Math.random()*900+100)+'K posts'}));
+    row.onclick=()=>{S.searchQ=tag;S.page='explore';doSearch(tag);render();};
+    sec2.appendChild(row);
+  });
+  scroll.appendChild(sec2);
+  scroll.appendChild(mk('div',{class:'rp-divider'}));
+  const fl=mk('div',{class:'rp-footer-links'});
+  ['About','Help','Privacy','Terms'].forEach(l=>fl.appendChild(mk('span',{class:'rp-footer-link',text:l})));
+  scroll.appendChild(fl);
+  panel.appendChild(scroll);return panel;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  EXPLORE
+// ═══════════════════════════════════════════════════════════════════════
+function renderExploreView(){
+  const view=mk('div',{class:'explore-view',style:'flex:1'});
+  const sw=mk('div',{class:'explore-search-wrap'});
+  const sb2=mk('div',{class:'explore-search-box'});
+  const icon=mkSvg('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>');
+  icon.setAttribute('class','explore-search-icon');
+  const inp=mk('input',{class:'explore-search-inp',placeholder:'Search users, hashtags...',type:'search',value:S.searchQ});
+  inp.oninput=e=>{S.searchQ=e.target.value;if(S.searchQ.length>1)doSearch(S.searchQ);else{S.searchRes={users:[],tags:[]};render();}};
+  sb2.appendChild(icon);sb2.appendChild(inp);
+  if(S.searchQ){
+    const cl=mk('button',{class:'explore-search-clear',text:'×'});
+    cl.onclick=()=>{S.searchQ='';S.searchRes={users:[],tags:[]};render();};
+    sb2.appendChild(cl);
+  }
+  sw.appendChild(sb2);view.appendChild(sw);
+
+  if(S.searchQ&&(S.searchRes.users.length>0||S.searchRes.tags.length>0)){
+    if(S.searchRes.users.length>0){
+      view.appendChild(mk('div',{class:'explore-results-section',text:'People'}));
+      S.searchRes.users.forEach(p=>{
+        const row=mk('div',{class:'explore-user-result',onclick:()=>goProfile(p.id)});
+        const av=buildAv(p,48,'explore-res-av');av.onclick=e=>{e.stopPropagation();goProfile(p.id);};
+        const info=mk('div',{class:'explore-res-info'});
+        info.appendChild(mk('div',{class:'explore-res-name',text:p.display_name||p.username}));
+        info.appendChild(mk('div',{class:'explore-res-handle',text:'@'+p.username}));
+        if(p.bio)info.appendChild(mk('div',{class:'explore-res-bio',text:p.bio.slice(0,60)}));
+        row.appendChild(av);row.appendChild(info);
+        const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+        if(p.id!==S.profile?.id){
+          const isF=myF.has(p.id);
+          const fb=mk('button',{class:'explore-res-follow-btn'+(isF?' following':''),text:isF?'Following':'Follow'});
+          fb.onclick=async e2=>{e2.stopPropagation();await handleFollow(p.id);render();};
+          row.appendChild(fb);
+        }
+        view.appendChild(row);
+      });
+    }
+  } else if(!S.searchQ){
+    const cats=mk('div',{class:'explore-categories'});
+    ['All','Photos','Videos','Reels','People'].forEach(c=>{
+      const b=mk('button',{class:'explore-cat-btn'+(S.exploreCategory===(c.toLowerCase())?' active':''),text:c});
+      b.onclick=()=>{S.exploreCategory=c.toLowerCase();render();};cats.appendChild(b);
+    });
+    view.appendChild(cats);
+    const grid=mk('div',{class:'explore-grid'});
+    const all=[...S.posts,...S.reels].sort(()=>Math.random()-.5).slice(0,30);
+    if(all.length===0){
+      const emp=mk('div',{class:'empty-state',style:'grid-column:1/-1;padding:48px 16px'});
+      emp.innerHTML=`<span class="empty-state-icon">🔍</span><div class="empty-state-title">Nothing to explore yet</div>`;
+      grid.appendChild(emp);
+    } else {
+      all.forEach(item=>{
+        const mediaUrl=item.media_url||item.video_url;
+        const isVid=item.media_type==='video'||!!item.video_url;
+        const cell=mk('div',{class:'explore-grid-item'});
+        if(mediaUrl){
+          if(isVid){const v=document.createElement('video');v.src=mediaUrl;v.className='explore-grid-img';v.muted=true;v.preload='metadata';cell.appendChild(v);cell.appendChild(mk('div',{class:'explore-grid-video-badge',html:'▶'}));}
+          else{const i=document.createElement('img');i.src=mediaUrl;i.className='explore-grid-img';i.loading='lazy';cell.appendChild(i);}
+        } else {cell.style.cssText+=';display:flex;align-items:center;justify-content:center;padding:8px;font-size:11px;color:var(--text2)';cell.textContent=(item.content||'').slice(0,60);}
+        const ov=mk('div',{class:'explore-grid-overlay'});
+        ov.innerHTML=`<span class="explore-grid-stat">❤ ${fmtCount(item.like_count||0)}</span><span class="explore-grid-stat">💬 ${fmtCount(item.comment_count||0)}</span>`;
+        cell.appendChild(ov);
+        cell.onclick=()=>{if(mediaUrl&&!isVid){S.lightbox={url:mediaUrl,type:'image'};render();}};
+        grid.appendChild(cell);
+      });
+    }
+    view.appendChild(grid);
+  }
+  return view;
+}
+
+async function doSearch(q){
+  const {data:users}=await sb.from('profiles').select('*').or(`username.ilike.%${q}%,display_name.ilike.%${q}%`).limit(10);
+  if(q!==S.searchQ)return;
+  S.searchRes={users:users||[],tags:[]};render();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════════════
+function renderNotifsView(){
+  const view=mk('div',{class:'notifs-view',style:'flex:1'});
+  const today=S.notifs.filter(n=>(Date.now()-new Date(n.created_at))/86400000<1);
+  const earlier=S.notifs.filter(n=>(Date.now()-new Date(n.created_at))/86400000>=1);
+  if(today.length>0){view.appendChild(mk('div',{class:'notif-section-header',text:'Today'}));today.forEach((n,i)=>{const el=renderNotifItem(n);el.style.animationDelay=i*.04+'s';view.appendChild(el);});}
+  if(earlier.length>0){view.appendChild(mk('div',{class:'notif-section-header',text:'Earlier'}));earlier.forEach((n,i)=>{const el=renderNotifItem(n);el.style.animationDelay=i*.04+'s';view.appendChild(el);});}
+  if(S.notifs.length===0){
+    const emp=mk('div',{class:'empty-state',style:'padding:60px 24px'});
+    emp.innerHTML=`<span class="empty-state-icon">🔔</span><div class="empty-state-title">No notifications</div><div class="empty-state-sub">When people like or comment on your posts, you'll see it here.</div>`;
+    view.appendChild(emp);
+  }
+  return view;
+}
+
+function renderNotifItem(n){
+  const prof=S.profiles.find(p=>p.id===n.from_id)||{username:'someone',avatar_color:'#888'};
+  const item=mk('div',{class:'notif-item'+(n.is_read?'':' unread')});
+  item.onclick=async()=>{
+    if(!n.is_read){await sb.from('notifications').update({is_read:true}).eq('id',n.id);n.is_read=true;render();}
+    if(n.from_id)goProfile(n.from_id);
+  };
+  const avWrap=mk('div',{class:'notif-av',style:'position:relative'});
+  avWrap.appendChild(buildAv(prof,44,''));
+  const typeIcons={like:'❤️',comment:'💬',follow:'👤',reel:'🎬',mention:'@'};
+  const typeClasses={like:'like',comment:'comment',follow:'follow',reel:'reel',mention:'mention'};
+  const ti=mk('div',{class:'notif-type-icon '+(typeClasses[n.type]||'like'),text:typeIcons[n.type]||'❤️'});
+  avWrap.appendChild(ti);
+  item.appendChild(avWrap);
+  const body=mk('div',{class:'notif-body'});
+  const msgs={like:'liked your post',comment:'commented on your post',follow:'started following you',reel:'liked your reel',mention:'mentioned you in a comment'};
+  const txt=mk('div',{class:'notif-text'});
+  const strong=mk('strong',{text:'@'+(prof.username||'someone')});strong.style.cursor='pointer';strong.onclick=e=>{e.stopPropagation();goProfile(prof.id);};
+  txt.appendChild(strong);
+  txt.appendChild(document.createTextNode(' '+(msgs[n.type]||'interacted with your content')));
+  body.appendChild(txt);
+  body.appendChild(mk('div',{class:'notif-time',text:timeAgo(n.created_at)}));
+  item.appendChild(body);
+  if(!n.is_read)item.appendChild(mk('div',{class:'notif-unread-dot'}));
+  return item;
+}
+
+async function markAllRead(){
+  const unread=S.notifs.filter(n=>!n.is_read);
+  if(unread.length===0)return;
+  await sb.from('notifications').update({is_read:true}).eq('user_id',S.user.id).eq('is_read',false);
+  S.notifs.forEach(n=>n.is_read=true);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PROFILE
+// ═══════════════════════════════════════════════════════════════════════
+function renderProfileView(userId){
+  const view=mk('div',{class:'profile-view',style:'flex:1'});
+  const prof=S.profiles.find(p=>p.id===userId)||S.profile;
+  if(!prof){view.appendChild(mk('div',{class:'empty-state',text:'User not found'}));return view;}
+
+  const hd=mk('div',{class:'profile-header'});
+  const top=mk('div',{class:'profile-top'});
+  const avWrap=mk('div',{class:'profile-av-wrap'});
+  const bigAv=buildAv(prof,80,'profile-av');
+  avWrap.appendChild(bigAv);
+  top.appendChild(avWrap);
+  const info=mk('div',{class:'profile-info'});
+  info.appendChild(mk('div',{class:'profile-dname',text:prof.display_name||prof.username}));
+  info.appendChild(mk('div',{class:'profile-handle',text:'@'+prof.username}));
+  if(prof.bio)info.appendChild(mk('div',{class:'profile-bio',text:prof.bio}));
+  top.appendChild(info);
+  hd.appendChild(top);
+
+  const userPosts=S.posts.filter(p=>p.user_id===userId);
+  const userReels=S.reels.filter(r=>r.user_id===userId);
+  const followers=S.follows.filter(f=>f.following_id===userId).length;
+  const following=S.follows.filter(f=>f.follower_id===userId).length;
+
+  const stats=mk('div',{class:'profile-stats'});
+  [[userPosts.length,'Posts'],[userReels.length,'Reels'],[followers,'Followers'],[following,'Following']].forEach(([n,l])=>{
+    const st=mk('div',{class:'profile-stat'});
+    if(l==='Followers'||l==='Following'){
+      st.onclick=()=>{S.followModal={type:l.toLowerCase(),userId};render();};
+    }
+    st.appendChild(mk('div',{class:'profile-stat-num',text:fmtCount(Number(n))}));
+    st.appendChild(mk('div',{class:'profile-stat-lbl',text:l}));
+    stats.appendChild(st);
+  });
+  hd.appendChild(stats);
+
+  const acts=mk('div',{class:'profile-actions'});
+  if(userId===S.profile?.id){
+    const eb=mk('button',{class:'profile-btn profile-btn-outline',text:'Edit profile'});
+    eb.onclick=()=>{S.editOpen=true;render();};
+    acts.appendChild(eb);
+    const share=mk('button',{class:'profile-btn profile-btn-outline'});
+    share.innerHTML=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Share`;
+    share.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(window.location.origin+'?u='+S.profile.username);toast('Profile link copied!','success');};
+    acts.appendChild(share);
+  } else {
+    const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+    const isF=myF.has(userId);
+    const fb=mk('button',{class:'profile-btn profile-btn-follow'+(isF?' following':''),text:isF?'Following':'Follow'});
+    fb.onclick=async()=>{await handleFollow(userId);render();};
+    acts.appendChild(fb);
+    const msg=mk('button',{class:'profile-btn profile-btn-msg',text:'Message'});
+    msg.onclick=()=>{S.page='messages';S.activeDm=userId;render();};
+    acts.appendChild(msg);
+  }
+  hd.appendChild(acts);
+  view.appendChild(hd);
+
+  // Tabs
+  let activeTab='posts';
+  const tabs=mk('div',{class:'profile-tabs'});
+  const tabContent=mk('div',{});
+  const renderTabContent=()=>{
+    tabContent.innerHTML='';
+    if(activeTab==='posts'){
+      if(userPosts.length===0){
+        const emp=mk('div',{class:'profile-empty'});
+        emp.innerHTML=`<div class="profile-empty-icon">📷</div><div class="profile-empty-title">No posts yet</div>`;
+        tabContent.appendChild(emp);
+      } else {
+        const grid=mk('div',{class:'profile-grid'});
+        [...userPosts].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).forEach(post=>{
+          const cell=mk('div',{class:'profile-grid-item'});
+          if(post.media_url){
+            if(post.media_type==='video'){const v=document.createElement('video');v.src=post.media_url;v.className='profile-grid-video';v.muted=true;v.preload='metadata';cell.appendChild(v);cell.appendChild(mk('div',{class:'profile-grid-video-badge',html:'▶'}));}
+            else{const i=document.createElement('img');i.src=post.media_url;i.className='profile-grid-img';i.loading='lazy';cell.appendChild(i);}
+          } else {cell.className+=' grid-text-post';cell.style.cssText+=';display:flex;align-items:center;justify-content:center;padding:8px;font-size:11px;color:var(--text2)';cell.textContent=(post.content||'').slice(0,60);}
+          const ov=mk('div',{class:'profile-grid-overlay'});
+          ov.innerHTML=`<span class="profile-grid-stat">❤ ${fmtCount(post.like_count||0)}</span><span class="profile-grid-stat">💬 ${fmtCount(post.comment_count||0)}</span>`;
+          cell.appendChild(ov);
+          cell.onclick=()=>{if(post.media_url)S.lightbox={url:post.media_url,type:post.media_type==='video'?'video':'image'};else openComments(post.id);render();};
+          grid.appendChild(cell);
+        });
+        tabContent.appendChild(grid);
+      }
+    } else {
+      if(userReels.length===0){
+        const emp=mk('div',{class:'profile-empty'});
+        emp.innerHTML=`<div class="profile-empty-icon">🎬</div><div class="profile-empty-title">No reels yet</div>`;
+        tabContent.appendChild(emp);
+      } else {
+        const grid=mk('div',{class:'profile-reels-grid'});
+        [...userReels].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).forEach(reel=>{
+          const cell=mk('div',{class:'profile-reel-item'});
+          if(reel.video_url){const v=document.createElement('video');v.src=reel.video_url;v.className='profile-reel-video';v.muted=true;v.preload='metadata';cell.appendChild(v);}
+          const ov=mk('div',{class:'profile-grid-overlay'});
+          ov.innerHTML=`<span class="profile-grid-stat">❤ ${fmtCount(reel.like_count||0)}</span><span class="profile-grid-stat">💬 ${fmtCount(reel.comment_count||0)}</span>`;
+          cell.appendChild(ov);
+          cell.onclick=()=>{S.sub='reels';S.page='feed';render();};
+          grid.appendChild(cell);
+        });
+        tabContent.appendChild(grid);
+      }
+    }
+  };
+
+  [{key:'posts',icon:'<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',label:'Posts'},
+   {key:'reels',icon:'<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',label:'Reels'}]
+  .forEach(t=>{
+    const tab=mk('div',{class:'profile-tab'+(activeTab===t.key?' active':'')});
+    tab.appendChild(mkSvg(t.icon));
+    tab.onclick=()=>{activeTab=t.key;qsa('.profile-tab').forEach(x=>x.classList.remove('active'));tab.classList.add('active');renderTabContent();};
+    tabs.appendChild(tab);
+  });
+  view.appendChild(tabs);
+  renderTabContent();
+  view.appendChild(tabContent);
+  return view;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FOLLOW MODAL
+// ═══════════════════════════════════════════════════════════════════════
+function renderFollowModal(){
+  const {type,userId}=S.followModal;
+  const overlay=mk('div',{class:'follow-modal-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay){S.followModal=null;render();}};
+  const modal=mk('div',{class:'follow-modal'});
+  const hd=mk('div',{class:'follow-modal-header'});
+  hd.appendChild(mk('span',{class:'follow-modal-title',text:type==='followers'?'Followers':'Following'}));
+  const x=mk('button',{class:'follow-modal-close',text:'×',onclick:()=>{S.followModal=null;render();}});
+  hd.appendChild(x);modal.appendChild(hd);
+  const list=mk('div',{class:'follow-modal-list'});
+  const ids=type==='followers'
+    ?S.follows.filter(f=>f.following_id===userId).map(f=>f.follower_id)
+    :S.follows.filter(f=>f.follower_id===userId).map(f=>f.following_id);
+  const profs=ids.map(id=>S.profiles.find(p=>p.id===id)).filter(Boolean);
+  const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+  profs.forEach(p=>{
+    const row=mk('div',{class:'follow-modal-item'});
+    const av=buildAv(p,40,'fm-av');av.style.cursor='pointer';av.onclick=()=>{S.followModal=null;goProfile(p.id);};
+    const info=mk('div',{class:'fm-info'});
+    const nm=mk('div',{class:'fm-name',text:p.display_name||p.username});nm.onclick=()=>{S.followModal=null;goProfile(p.id);};
+    info.appendChild(nm);info.appendChild(mk('div',{class:'fm-handle',text:'@'+p.username}));
+    row.appendChild(av);row.appendChild(info);
+    if(p.id!==S.profile?.id){
+      const isF=myF.has(p.id);
+      const fb=mk('button',{class:'fm-follow-btn'+(isF?' following':''),text:isF?'Following':'Follow'});
+      fb.onclick=async()=>{await handleFollow(p.id);render();};
+      row.appendChild(fb);
+    }
+    list.appendChild(row);
+  });
+  if(profs.length===0){list.appendChild(mk('div',{class:'empty-state',style:'padding:32px',text:'Nobody here yet'}));}
+  modal.appendChild(list);overlay.appendChild(modal);return overlay;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  EDIT PROFILE
+// ═══════════════════════════════════════════════════════════════════════
+function renderEditProfile(){
+  let dname=S.profile?.display_name||'';
+  let bio=S.profile?.bio||'';
+  let username=S.profile?.username||'';
+  const overlay=mk('div',{class:'edit-profile-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay){S.editOpen=false;render();}};
+  const modal=mk('div',{class:'edit-profile-modal'});
+  const hd=mk('div',{class:'edit-profile-header'});
+  hd.appendChild(mk('span',{class:'edit-profile-title',text:'Edit profile'}));
+  const x=mk('button',{class:'edit-profile-close'});
+  x.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  x.onclick=()=>{S.editOpen=false;render();};hd.appendChild(x);modal.appendChild(hd);
+  const body=mk('div',{class:'edit-profile-body'});
+
+  // Avatar section
+  const avSec=mk('div',{class:'edit-av-section'});
+  const avWrap=mk('div',{class:'edit-av-wrap'});
+  const avEl=buildAv(S.profile,80,'edit-av');
+  avWrap.appendChild(avEl);
+  const avOv=mk('div',{class:'edit-av-overlay'});
+  avOv.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
+  avWrap.appendChild(avOv);
+  avSec.appendChild(avWrap);
+  const avBtn=mk('button',{class:'edit-av-btn',text:'Change profile photo'});
+  const avInp=mk('input',{type:'file',accept:'image/*'});avInp.style.display='none';
+  avBtn.onclick=()=>avInp.click();
+  avInp.onchange=async()=>{
+    const f=avInp.files[0];if(!f)return;
+    const path=`avatars/${S.user.id}.${f.name.split('.').pop()}`;
+    const {error}=await sb.storage.from('media').upload(path,f,{cacheControl:'3600',upsert:true});
+    if(!error){const {data:{publicUrl}}=sb.storage.from('media').getPublicUrl(path);await sb.from('profiles').update({avatar_url:publicUrl}).eq('id',S.user.id);S.profile.avatar_url=publicUrl;toast('Photo updated!','success');}
+    else toast('Upload failed: '+error.message,'error');
+  };
+  avSec.appendChild(avBtn);avSec.appendChild(avInp);body.appendChild(avSec);
+
+  [{lbl:'Display name',val:dname,ph:'Your name',cb:v=>dname=v},{lbl:'Username',val:username,ph:'username',cb:v=>username=v}].forEach(({lbl,val,ph,cb})=>{
+    const f=mk('div',{class:'edit-form-field'});
+    f.appendChild(mk('label',{class:'edit-form-label',text:lbl}));
+    const inp=mk('input',{class:'edit-form-inp',value:val,placeholder:ph,type:'text'});
+    inp.oninput=e=>cb(e.target.value);
+    f.appendChild(inp);body.appendChild(f);
+  });
+
+  const bioField=mk('div',{class:'edit-form-field'});
+  bioField.appendChild(mk('label',{class:'edit-form-label',text:'Bio'}));
+  const bioTa=mk('textarea',{class:'edit-form-ta',placeholder:'Write something about yourself...'});
+  bioTa.value=bio;bioTa.rows=4;
+  const bioCount=mk('div',{class:'edit-form-char-count',text:bio.length+'/'+MAX_BIO});
+  bioTa.oninput=e=>{bio=e.target.value;const ov=bio.length>MAX_BIO;bioCount.textContent=bio.length+'/'+MAX_BIO;bioCount.className='edit-form-char-count'+(ov?' over':'');};
+  bioField.appendChild(bioTa);bioField.appendChild(bioCount);body.appendChild(bioField);
+  modal.appendChild(body);
+
+  const foot=mk('div',{class:'edit-profile-footer'});
+  const cancel=mk('button',{class:'edit-profile-cancel',text:'Cancel',onclick:()=>{S.editOpen=false;render();}});
+  const save=mk('button',{class:'edit-profile-save',text:'Save'});
+  save.onclick=async()=>{
+    if(bio.length>MAX_BIO){toast('Bio is too long','error');return;}
+    save.disabled=true;save.textContent='Saving...';
+    await sb.from('profiles').update({display_name:dname,bio,username}).eq('id',S.user.id);
+    S.profile.display_name=dname;S.profile.bio=bio;S.profile.username=username;
+    const pi=S.profiles.findIndex(p=>p.id===S.user.id);
+    if(pi>=0)S.profiles[pi]={...S.profiles[pi],display_name:dname,bio,username};
+    S.editOpen=false;render();toast('Profile updated! ✅','success');
+  };
+  foot.appendChild(cancel);foot.appendChild(save);modal.appendChild(foot);
+  overlay.appendChild(modal);return overlay;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  DMs
+// ═══════════════════════════════════════════════════════════════════════
+function renderDmView(){
+  const view=mk('div',{class:'dm-view',style:'flex:1'});
+  const left=mk('div',{class:'dm-list'});
+  const lhd=mk('div',{class:'dm-list-header'});
+  lhd.appendChild(mk('span',{class:'dm-list-title',text:S.profile?.username||'Messages'}));
+  const cb=mk('button',{class:'dm-compose-btn'});
+  cb.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`;
+  lhd.appendChild(cb);left.appendChild(lhd);
+
+  const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+  const convProfiles=S.profiles.filter(p=>p.id!==S.profile?.id&&myF.has(p.id));
+  const convs=mk('div',{class:'dm-conversations'});
+  convProfiles.forEach(p=>{
+    const item=mk('div',{class:'dm-conv-item'+(S.activeDm===p.id?' active':'')});
+    const avW=mk('div',{class:'dm-conv-av',style:'position:relative'});
+    avW.appendChild(buildAv(p,44,''));
+    item.appendChild(avW);
+    const ci=mk('div',{class:'dm-conv-info'});
+    ci.appendChild(mk('div',{class:'dm-conv-name',text:p.display_name||p.username}));
+    ci.appendChild(mk('div',{class:'dm-conv-last',text:'Say hi! 👋'}));
+    item.appendChild(ci);
+    const cm=mk('div',{class:'dm-conv-meta'});
+    cm.appendChild(mk('div',{class:'dm-conv-time',text:'now'}));
+    item.appendChild(cm);
+    item.onclick=()=>{S.activeDm=p.id;render();};
+    convs.appendChild(item);
+  });
+  if(convProfiles.length===0){
+    const emp=mk('div',{class:'dm-empty-state'});
+    emp.innerHTML=`<div class="dm-empty-icon">✉️</div><div class="dm-empty-title">No messages</div><div class="dm-empty-sub">Follow people to start messaging them</div>`;
+    convs.appendChild(emp);
+  }
+  left.appendChild(convs);view.appendChild(left);
+
+  // Chat
+  const chat=mk('div',{class:'dm-chat'});
+  if(!S.activeDm){
+    const emp=mk('div',{class:'dm-chat-empty'});
+    emp.innerHTML=`<div class="dm-chat-empty-icon">💬</div><div class="dm-chat-empty-text">Your messages</div><div class="dm-chat-empty-sub">Send private messages to friends and people you follow</div>`;
+    chat.appendChild(emp);
+  } else {
+    const activePro=S.profiles.find(p=>p.id===S.activeDm);
+    const chd=mk('div',{class:'dm-chat-header'});
+    const cav=buildAv(activePro,36,'dm-chat-av');cav.style.cursor='pointer';cav.onclick=()=>goProfile(S.activeDm);
+    chd.appendChild(cav);
+    const cn=mk('div',{class:'dm-chat-name',text:activePro?.display_name||activePro?.username||''});
+    cn.onclick=()=>goProfile(S.activeDm);chd.appendChild(cn);
+    const cacts=mk('div',{class:'dm-chat-actions'});
+    [
+      `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.99 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.92 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`,
+      `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>`,
+    ].forEach(ico=>{
+      const b=mk('button',{class:'dm-chat-action-btn',html:ico});
+      b.onclick=()=>toast('Video/voice call coming soon!');
+      cacts.appendChild(b);
+    });
+    chd.appendChild(cacts);chat.appendChild(chd);
+
+    const msgs=mk('div',{class:'dm-messages'});
+    const convMsgs=S.msgs[S.activeDm]||[];
+    if(convMsgs.length===0){
+      msgs.appendChild(mk('div',{class:'dm-day-divider',text:'Start of conversation'}));
+      const greeting=mk('div',{class:'dm-msg theirs',style:'align-items:center;justify-content:center'});
+      const greetBubble=mk('div',{class:'dm-msg-bubble',style:'background:var(--bg3);color:var(--text2);text-align:center;padding:12px 20px'});
+      greetBubble.textContent='👋 Say hello to '+( activePro?.username||'them')+'!';
+      greeting.appendChild(greetBubble);msgs.appendChild(greeting);
+    } else {
+      convMsgs.forEach(msg=>{
+        const isMine=msg.sender===S.user.id;
+        const mEl=mk('div',{class:'dm-msg '+(isMine?'mine':'theirs')});
+        const bubble=mk('div',{class:'dm-msg-bubble',text:msg.text});
+        mEl.appendChild(bubble);
+        mEl.appendChild(mk('div',{class:'dm-msg-meta',text:timeAgo(msg.ts)}));
+        msgs.appendChild(mEl);
+      });
+    }
+    msgs.scrollTop=msgs.scrollHeight;
+    chat.appendChild(msgs);
+
+    // Input
+    const ia=mk('div',{class:'dm-input-area'});
+    const iacts=mk('div',{class:'dm-input-actions'});
+    [
+      `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+      `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`,
+    ].forEach(ico=>{
+      const b=mk('button',{class:'dm-input-action',html:ico});
+      iacts.appendChild(b);
+    });
+    ia.appendChild(iacts);
+    const iw=mk('div',{class:'dm-inp-wrap'});
+    const inp=mk('textarea',{class:'dm-inp',placeholder:'Message...'});
+    inp.rows=1;
+    inp.oninput=()=>{inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,120)+'px';sendBtn.disabled=!inp.value.trim();};
+    inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}};
+    iw.appendChild(inp);ia.appendChild(iw);
+    const sendBtn=mk('button',{class:'dm-send-btn'});
+    sendBtn.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
+    sendBtn.disabled=true;
+    sendBtn.onclick=()=>{
+      const txt=inp.value.trim();if(!txt)return;
+      if(!S.msgs[S.activeDm])S.msgs[S.activeDm]=[];
+      S.msgs[S.activeDm].push({sender:S.user.id,text:txt,ts:new Date().toISOString()});
+      inp.value='';inp.style.height='auto';sendBtn.disabled=true;
+      // Refresh messages
+      const msgEl=chat.querySelector('.dm-messages');
+      if(msgEl){const m=mk('div',{class:'dm-msg mine'});const b=mk('div',{class:'dm-msg-bubble',text:txt});m.appendChild(b);msgEl.appendChild(m);msgEl.scrollTop=msgEl.scrollHeight;}
+    };
+    ia.appendChild(sendBtn);chat.appendChild(ia);
+  }
+  view.appendChild(chat);
+  return view;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CREATE MODAL
+// ═══════════════════════════════════════════════════════════════════════
+function renderModal(){
+  const type=S.modal?.type;
+  if(type==='select')return renderSelectModal();
+  if(type==='post'||type==='story')return renderUploadModal(type);
+  if(type==='reel')return renderReelModal();
+  return mk('div',{});
+}
+
+function renderSelectModal(){
+  const overlay=mk('div',{class:'create-modal-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay){S.modal=null;render();}};
+  const modal=mk('div',{class:'create-modal'});
+  const hd=mk('div',{class:'create-modal-header'});
+  hd.appendChild(mk('span',{class:'create-modal-title',text:'Create'}));
+  const x=mk('button',{class:'create-modal-close'});
+  x.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  x.onclick=()=>{S.modal=null;render();};hd.appendChild(x);modal.appendChild(hd);
+  const body=mk('div',{class:'create-modal-body'});
+  const grid=mk('div',{class:'create-type-grid'});
+  [{type:'post',icon:'📷',label:'Post'},{type:'story',icon:'⭕',label:'Story'},{type:'reel',icon:'🎬',label:'Reel'}].forEach(item=>{
+    const btn=mk('div',{class:'create-type-btn'});
+    btn.appendChild(mk('span',{class:'create-type-icon',text:item.icon}));
+    btn.appendChild(mk('span',{class:'create-type-label',text:item.label}));
+    btn.onclick=()=>{S.modal={type:item.type};render();};
+    grid.appendChild(btn);
+  });
+  body.appendChild(grid);modal.appendChild(body);overlay.appendChild(modal);return overlay;
+}
+
+function renderUploadModal(type){
+  let file=null,mtype=null,caption='';
+  const overlay=mk('div',{class:'create-modal-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay){S.modal=null;render();}};
+  const modal=mk('div',{class:'create-modal'});
+  const hd=mk('div',{class:'create-modal-header'});
+  hd.appendChild(mk('span',{class:'create-modal-title',text:type==='story'?'New Story':'New Post'}));
+  const x=mk('button',{class:'create-modal-close'});
+  x.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  x.onclick=()=>{S.modal=null;render();};hd.appendChild(x);modal.appendChild(hd);
+  const body=mk('div',{class:'create-modal-body'});
+  const zone=mk('div',{class:'upload-drop-zone'});
+  zone.innerHTML=`<div class="upload-icon">${type==='story'?'⭕':'📷'}</div><div class="upload-title">Select photo or video</div><div class="upload-sub">JPG, PNG, GIF, MP4 supported</div><div class="upload-or">— or —</div>`;
+  const browseBtn=mk('button',{class:'upload-browse-btn',text:'Browse files'});
+  const finp=mk('input',{type:'file',accept:'image/*,video/*'});finp.style.display='none';
+  const prevWrap=mk('div',{});
+  const submitBtn=mk('button',{class:'create-submit-btn'});
+  submitBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Share`;
+  submitBtn.disabled=true;
+
+  const handleFile=f=>{
+    file=f;mtype=f.type.startsWith('video/')?'video':'image';
+    const url=URL.createObjectURL(f);
+    prevWrap.innerHTML='';
+    const pw=mk('div',{class:'upload-preview-wrap'});
+    if(mtype==='video'){const v=document.createElement('video');v.src=url;v.className='upload-preview-video';v.controls=true;pw.appendChild(v);}
+    else{const img=document.createElement('img');img.src=url;img.className='upload-preview-img';pw.appendChild(img);}
+    const rm=mk('button',{class:'upload-preview-remove',text:'×'});rm.onclick=()=>{file=null;mtype=null;prevWrap.innerHTML='';zone.style.display='block';submitBtn.disabled=true;};
+    pw.appendChild(rm);prevWrap.appendChild(pw);
+    zone.style.display='none';submitBtn.disabled=false;
+  };
+
+  finp.onchange=()=>{if(finp.files[0])handleFile(finp.files[0]);};
+  browseBtn.onclick=()=>finp.click();
+  zone.onclick=()=>finp.click();
+  zone.ondragover=e=>{e.preventDefault();zone.classList.add('drag-over');};
+  zone.ondragleave=()=>zone.classList.remove('drag-over');
+  zone.ondrop=e=>{e.preventDefault();zone.classList.remove('drag-over');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0]);};
+  zone.appendChild(browseBtn);zone.appendChild(finp);
+  body.appendChild(zone);body.appendChild(prevWrap);
+
+  if(type==='post'){
+    body.appendChild(mk('label',{class:'create-form-label',text:'Caption'}));
+    const cap=mk('textarea',{class:'create-form-ta',placeholder:"Write a caption..."});cap.rows=3;
+    cap.oninput=e=>{caption=e.target.value;submitBtn.disabled=!caption.trim()&&!file;};body.appendChild(cap);
+  }
+  modal.appendChild(body);
+
+  const prog=mk('div',{class:'create-progress',style:'display:none'});
+  const pf=mk('div',{class:'create-progress-fill',style:'width:0'});
+  prog.appendChild(pf);modal.appendChild(prog);
+
+  const foot=mk('div',{class:'create-modal-footer'});
+  const cancel=mk('button',{class:'create-cancel-btn',text:'Cancel',onclick:()=>{S.modal=null;render();}});
+
+  submitBtn.onclick=async()=>{
+    if(!file&&type==='story'){toast('Select a photo or video first','error');return;}
+    if(!file&&type==='post'&&!caption.trim()){toast('Write something or add a photo','error');return;}
+    submitBtn.disabled=true;submitBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Uploading...`;
+    prog.style.display='block';pf.style.width='30%';
+    try{
+      let mediaUrl=null;
+      if(file){pf.style.width='50%';mediaUrl=await uploadMedia(file,S.user.id);pf.style.width='80%';}
+      if(type==='post'){
+        await sb.from('posts').insert({user_id:S.user.id,content:caption,media_url:mediaUrl,media_type:mtype});
+        toast('Post shared! ✨','success');
+      } else {
+        if(!mediaUrl)throw new Error('Upload failed');
+        await sb.from('stories').insert({user_id:S.user.id,media_url:mediaUrl,media_type:mtype});
+        toast('Story added! ⭕','success');
+      }
+      pf.style.width='100%';
+      S.modal=null;await loadAll();render();
+    } catch(err){toast('Error: '+err.message,'error');submitBtn.disabled=false;submitBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Share`;}
+  };
+  foot.appendChild(cancel);foot.appendChild(submitBtn);modal.appendChild(foot);
+  overlay.appendChild(modal);return overlay;
+}
+
+function renderReelModal(){
+  let file=null,caption='',fbUrl='';
+  const overlay=mk('div',{class:'create-modal-overlay'});
+  overlay.onclick=e=>{if(e.target===overlay){S.modal=null;render();}};
+  const modal=mk('div',{class:'create-modal'});
+  const hd=mk('div',{class:'create-modal-header'});
+  hd.appendChild(mk('span',{class:'create-modal-title',text:'New Reel'}));
+  const x=mk('button',{class:'create-modal-close'});
+  x.innerHTML=`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  x.onclick=()=>{S.modal=null;render();};hd.appendChild(x);modal.appendChild(hd);
+  const body=mk('div',{class:'create-modal-body'});
+  const zone=mk('div',{class:'upload-drop-zone'});
+  zone.innerHTML=`<div class="upload-icon">🎬</div><div class="upload-title">Select a video</div><div class="upload-sub">MP4, MOV — vertical videos work best</div><div class="upload-or">— or —</div>`;
+  const browseBtn=mk('button',{class:'upload-browse-btn',text:'Browse videos'});
+  const finp=mk('input',{type:'file',accept:'video/*'});finp.style.display='none';
+  const prevWrap=mk('div',{});
+  finp.onchange=()=>{
+    file=finp.files[0];if(!file)return;
+    const url=URL.createObjectURL(file);
+    prevWrap.innerHTML='';zone.style.display='none';
+    const pw=mk('div',{class:'upload-preview-wrap'});
+    const vid=document.createElement('video');vid.src=url;vid.className='upload-preview-video';vid.controls=true;
+    const rm=mk('button',{class:'upload-preview-remove',text:'×'});rm.onclick=()=>{file=null;prevWrap.innerHTML='';zone.style.display='block';};
+    pw.appendChild(vid);pw.appendChild(rm);prevWrap.appendChild(pw);
+  };
+  browseBtn.onclick=()=>finp.click();zone.onclick=()=>finp.click();
+  zone.appendChild(browseBtn);zone.appendChild(finp);
+  body.appendChild(zone);body.appendChild(prevWrap);
+
+  body.appendChild(mk('label',{class:'create-form-label',text:'Caption'}));
+  const cap=mk('textarea',{class:'create-form-ta',placeholder:'Add a caption...'});cap.rows=3;cap.oninput=e=>caption=e.target.value;body.appendChild(cap);
+
+  const fbSec=mk('div',{class:'fb-embed-section'});
+  fbSec.appendChild(mk('div',{class:'fb-embed-label',html:'<span>🎬</span> OR embed a Facebook Video'}));
+  fbSec.appendChild(mk('div',{class:'fb-embed-sub',text:'Paste a public Facebook video URL to show it as a reel'}));
+  const fbInp=mk('input',{class:'fb-embed-inp',placeholder:'https://www.facebook.com/watch/?v=...',type:'url'});
+  fbInp.oninput=e=>fbUrl=e.target.value;fbSec.appendChild(fbInp);
+  body.appendChild(fbSec);
+  modal.appendChild(body);
+
+  const foot=mk('div',{class:'create-modal-footer'});
+  const cancel=mk('button',{class:'create-cancel-btn',text:'Cancel',onclick:()=>{S.modal=null;render();}});
+  const submitBtn=mk('button',{class:'create-submit-btn',text:'Post Reel'});
+  submitBtn.onclick=async()=>{
+    if(!file&&!fbUrl.trim()){toast('Upload a video or paste a Facebook URL','error');return;}
+    submitBtn.disabled=true;submitBtn.textContent='Posting...';
+    try{
+      let videoUrl=null;
+      if(file){
+        const rpath=`${S.user.id}/${Date.now()}.${file.name.split('.').pop()}`;
+        const {error:re}=await uploadWithTimeout('media',rpath,file,{},60000);
+        if(re)throw re;
+        videoUrl=sb.storage.from('media').getPublicUrl(rpath).data.publicUrl;
+      }
+      await sb.from('reels').insert({user_id:S.user.id,video_url:videoUrl||'',caption,fb_embed:fbUrl.trim()||null});
+      toast('Reel posted! 🎬','success');S.modal=null;await loadAll();render();
+    } catch(err){toast('Error: '+err.message,'error');submitBtn.disabled=false;submitBtn.textContent='Post Reel';}
+  };
+  foot.appendChild(cancel);foot.appendChild(submitBtn);modal.appendChild(foot);
+  overlay.appendChild(modal);return overlay;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  NAVIGATION
+// ═══════════════════════════════════════════════════════════════════════
+function goProfile(userId){
+  S.page='profile';S.viewUser=userId;render();
+}
+
+async function handleFollow(userId){
+  const myF=new Set(S.follows.filter(f=>f.follower_id===S.profile?.id).map(f=>f.following_id));
+  if(myF.has(userId)){
+    await sb.from('follows').delete().eq('follower_id',S.user.id).eq('following_id',userId);
+    S.follows=S.follows.filter(f=>!(f.follower_id===S.user.id&&f.following_id===userId));
+  } else {
+    await sb.from('follows').insert({follower_id:S.user.id,following_id:userId});
+    S.follows.push({follower_id:S.user.id,following_id:userId});
+    await sb.from('notifications').insert({user_id:userId,from_id:S.user.id,type:'follow'});
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  DATA LAYER
+// ═══════════════════════════════════════════════════════════════════════
+async function loadAll(){
+  const now=new Date().toISOString();
+  const [postsR,storiesR,reelsR,profsR,followsR,likesR,reelLikesR,notifsR]=await Promise.all([
+    sb.from('posts').select('*').order('created_at',{ascending:false}).limit(100),
+    sb.from('stories').select('*').gte('expires_at',now),
+    sb.from('reels').select('*').order('created_at',{ascending:false}).limit(50),
+    sb.from('profiles').select('*'),
+    sb.from('follows').select('*'),
+    sb.from('likes').select('post_id').eq('user_id',S.user.id).not('post_id','is',null),
+    sb.from('likes').select('reel_id').eq('user_id',S.user.id).not('reel_id','is',null),
+    sb.from('notifications').select('*').eq('user_id',S.user.id).order('created_at',{ascending:false}).limit(50),
+  ]);
+  S.posts=postsR.data||[];
+  S.stories=storiesR.data||[];
+  S.reels=reelsR.data||[];
+  S.profiles=profsR.data||[];
+  S.follows=followsR.data||[];
+  S.postLikes=new Set((likesR.data||[]).map(l=>l.post_id));
+  S.reelLikes=new Set((reelLikesR.data||[]).map(l=>l.reel_id));
+  S.notifs=notifsR.data||[];
+  await buildCounts();
+}
+
+async function loadPosts(){
+  const {data}=await sb.from('posts').select('*').order('created_at',{ascending:false}).limit(100);
+  S.posts=data||[];await buildCounts();
+}
+
+async function buildCounts(){
+  const [lc,rlc,cc,rcc]=await Promise.all([
+    sb.from('likes').select('post_id').not('post_id','is',null),
+    sb.from('likes').select('reel_id').not('reel_id','is',null),
+    sb.from('comments').select('post_id').not('post_id','is',null),
+    sb.from('comments').select('reel_id').not('reel_id','is',null),
+  ]);
+  const pm={};(lc.data||[]).forEach(l=>pm[l.post_id]=(pm[l.post_id]||0)+1);
+  S.posts.forEach(p=>p.like_count=pm[p.id]||0);
+  const rm={};(rlc.data||[]).forEach(l=>rm[l.reel_id]=(rm[l.reel_id]||0)+1);
+  S.reels.forEach(r=>r.like_count=rm[r.id]||0);
+  const cm={};(cc.data||[]).forEach(c=>cm[c.post_id]=(cm[c.post_id]||0)+1);
+  S.posts.forEach(p=>p.comment_count=cm[p.id]||0);
+  const rcm={};(rcc.data||[]).forEach(c=>rcm[c.reel_id]=(rcm[c.reel_id]||0)+1);
+  S.reels.forEach(r=>r.comment_count=rcm[r.id]||0);
+}
+
+function setupRealtime(){
+  rtChannels.forEach(c=>sb.removeChannel(c));rtChannels=[];
+  const ch=sb.channel('socialbox-rt')
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'posts'},async p=>{
+      if(!S.posts.find(x=>x.id===p.new.id)){
+        S.posts.unshift({...p.new,like_count:0,comment_count:0});
+        const prof=S.profiles.find(x=>x.id===p.new.user_id);
+        if(p.new.user_id!==S.user.id&&prof)toast('📸 @'+prof.username+' posted','info');
+        render();
+      }
+    })
+    .on('postgres_changes',{event:'DELETE',schema:'public',table:'posts'},p=>{
+      S.posts=S.posts.filter(x=>x.id!==p.old.id);render();
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'stories'},p=>{
+      if(!S.stories.find(x=>x.id===p.new.id)){S.stories.push(p.new);render();}
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'reels'},p=>{
+      if(!S.reels.find(x=>x.id===p.new.id)){S.reels.unshift({...p.new,like_count:0,comment_count:0});render();}
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:'user_id=eq.'+S.user.id},p=>{
+      if(!S.notifs.find(x=>x.id===p.new.id)){S.notifs.unshift(p.new);render();}
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'follows'},p=>{
+      if(!S.follows.find(x=>x.follower_id===p.new.follower_id&&x.following_id===p.new.following_id)){S.follows.push(p.new);}
+    })
+    .subscribe();
+  rtChannels.push(ch);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  BOOT
+// ═══════════════════════════════════════════════════════════════════════
+async function init(){
+  initToasts();
+  const {data:{session}}=await sb.auth.getSession();
+  if(session){
+    S.user=session.user;
+    const {data}=await sb.from('profiles').select('*').eq('id',S.user.id).single();
+    S.profile=data;
+    await loadAll();
+    setupRealtime();
+  }
+  S.loading=false;render();
+
+  sb.auth.onAuthStateChange(async(_,session)=>{
+    if(session){
+      S.user=session.user;S.loading=true;render();
+      const {data}=await sb.from('profiles').select('*').eq('id',S.user.id).single();
+      S.profile=data;
+      await loadAll();setupRealtime();S.loading=false;
+    } else {
+      S.user=null;S.profile=null;
+      iObservers.forEach(o=>o.disconnect());iObservers=[];
+      rtChannels.forEach(c=>sb.removeChannel(c));rtChannels=[];
+    }
+    render();
+  });
+}
+init();
+</script>
+</body>
+</html>
